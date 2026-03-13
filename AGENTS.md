@@ -20,7 +20,7 @@ curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download
 
 Place the binary somewhere on PATH (e.g. `~/.local/bin/` on Linux, or any folder on Windows). Run it — config auto-generates on first launch.
 
-Available binaries: **Windows x86_64**. Other platforms: build from source (see below).
+Available binaries: **Windows x86_64**, **Linux x86_64**, **macOS ARM64**, **macOS x64**. Built automatically on every tagged release.
 
 ## Build from Source (Fallback)
 

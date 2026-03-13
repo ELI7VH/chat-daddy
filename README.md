@@ -57,7 +57,7 @@ gh release download --repo ELI7VH/chat-daddy --pattern "chat-daddy.exe" --dir .
 curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download/TAG/chat-daddy.exe
 ```
 
-Currently available binaries: **Windows x86_64**. Other platforms: build from source.
+Binaries are built automatically for **Windows x86_64**, **Linux x86_64**, **macOS ARM64**, and **macOS x64** on every tagged release.
 
 ## Controls
 
