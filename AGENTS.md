@@ -14,105 +14,89 @@ Copy-paste this entire block. It detects the platform, downloads the correct bin
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── 1. Determine platform and asset name ──
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-case "$OS-$ARCH" in
-  Darwin-arm64)  ASSET="chat-daddy-macos-arm64" ;;
-  Darwin-x86_64) ASSET="chat-daddy-macos-x64"   ;;
-  Linux-x86_64)  ASSET="chat-daddy-linux"        ;;
-  *)             echo "No prebuilt binary for $OS-$ARCH — fall back to cargo build"; ASSET="" ;;
-esac
+# ── Asset naming convention ──
+# Binary names follow: chat-daddy-{os}-{arch}
+# where {os} = lowercase uname -s (darwin, linux)
+# and {arch} = uname -m (arm64, x86_64)
+# This means agents can construct the name directly — no lookup table needed.
+ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"
 
-# ── 2. Install directory ──
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
-# ── 3. Download or build ──
-if [ -n "$ASSET" ]; then
-  if command -v gh &>/dev/null; then
-    gh release download --repo ELI7VH/chat-daddy --pattern "$ASSET" --dir /tmp --clobber
-  else
-    curl -fSL -o "/tmp/$ASSET" "https://github.com/ELI7VH/chat-daddy/releases/latest/download/$ASSET"
-  fi
-  chmod +x "/tmp/$ASSET"
-  mv "/tmp/$ASSET" "$INSTALL_DIR/chat-daddy"
+# ── Download ──
+if command -v gh &>/dev/null; then
+  gh release download --repo ELI7VH/chat-daddy --pattern "$ASSET" --dir /tmp --clobber
 else
-  # Requires Rust toolchain
-  REPO_DIR="${REPO_DIR:-$(mktemp -d)}"
-  git clone https://github.com/ELI7VH/chat-daddy.git "$REPO_DIR/chat-daddy" 2>/dev/null || true
-  cd "$REPO_DIR/chat-daddy"
-  cargo build --release
-  cp target/release/chat-daddy "$INSTALL_DIR/chat-daddy"
+  curl -fSL -o "/tmp/$ASSET" "https://github.com/ELI7VH/chat-daddy/releases/latest/download/$ASSET"
 fi
+chmod +x "/tmp/$ASSET"
+mv "/tmp/$ASSET" "$INSTALL_DIR/chat-daddy"
 
-# ── 4. Ensure ~/.local/bin is on PATH ──
+# ── Ensure ~/.local/bin is on PATH ──
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.zshrc" 2>/dev/null \
     || echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.bashrc" 2>/dev/null
   export PATH="$INSTALL_DIR:$PATH"
 fi
 
-# ── 5. Font check ──
-# Chat Daddy needs a monospace TTF font. Default is Fira Code (weight 300).
-# If missing, it falls back to whatever monospace font is available via config.
+# ── Font check ──
 FONT_OK=false
-if [ "$OS" = "Darwin" ]; then
+if [ "$(uname -s)" = "Darwin" ]; then
   find ~/Library/Fonts /Library/Fonts /System/Library/Fonts -iname "*firacode*" -print -quit 2>/dev/null | grep -q . && FONT_OK=true
-elif [ "$OS" = "Linux" ]; then
+elif [ "$(uname -s)" = "Linux" ]; then
   fc-list 2>/dev/null | grep -qi "fira code" && FONT_OK=true
 fi
-
 if ! $FONT_OK; then
-  echo "⚠ Fira Code font not found."
-  echo "  Option A: Install it — https://github.com/tonsky/FiraCode/releases"
-  echo "  Option B: Edit ~/.chat-daddy/config.json after first run and set"
-  echo "            \"font\" to a monospace font you have (e.g. \"Menlo\", \"Consolas\", \"DejaVu Sans Mono\")"
+  echo "Fira Code not found. Install it or edit ~/.chat-daddy/config.json -> \"font\" to any monospace font you have."
 fi
 
-# ── 6. Launch ──
-echo "chat-daddy installed at $INSTALL_DIR/chat-daddy"
+# ── Launch ──
 chat-daddy &
 ```
 
-For **Windows**, download `chat-daddy.exe` from the latest release and run it. Font detection and PATH setup are automatic on Windows.
+For **Windows**: `chat-daddy-windows-x86_64.exe` — download from the latest release and run.
 
-## Manual Install (if the script above doesn't suit the situation)
+If no prebuilt binary exists for the platform (the curl/gh step fails), fall back to `cargo build --release`.
 
-### Binary Asset Names
+## Asset Naming Convention
 
-Use **exact** asset names — do not guess patterns like `*darwin*` or `*aarch64*`.
+Binary names follow a **deterministic pattern** that matches raw `uname` output:
 
-| Platform              | Asset name                  |
-|-----------------------|-----------------------------|
-| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
-| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
-| Linux x86_64           | `chat-daddy-linux`         |
-| Windows x86_64         | `chat-daddy.exe`           |
+```
+chat-daddy-{os}-{arch}
+```
 
-### Download Commands
+- `{os}` = `uname -s | tr A-Z a-z` → `darwin`, `linux`
+- `{arch}` = `uname -m` → `arm64`, `x86_64`
 
-Both commands always fetch the **latest** release — no version hardcoding.
+This means an agent can **construct** the asset name instead of looking it up:
 
 ```bash
-# via gh CLI (recommended)
-gh release download --repo ELI7VH/chat-daddy --pattern "ASSET" --dir .
-chmod +x ASSET
+ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"
+```
 
-# via curl
-curl -fSL -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
+### All Available Assets
+
+| Platform               | Asset name                       | How `uname` maps                |
+|------------------------|----------------------------------|---------------------------------|
+| macOS ARM64 (M1/M2+)   | `chat-daddy-darwin-arm64`        | `darwin` + `arm64`              |
+| macOS x64 (Intel)       | `chat-daddy-darwin-x86_64`       | `darwin` + `x86_64`            |
+| Linux x86_64            | `chat-daddy-linux-x86_64`        | `linux` + `x86_64`             |
+| Windows x86_64          | `chat-daddy-windows-x86_64.exe`  | N/A — just use this name        |
+
+### Download (manual)
+
+```bash
+# Construct asset name automatically
+ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"
+
+# gh CLI (always fetches latest)
+gh release download --repo ELI7VH/chat-daddy --pattern "$ASSET" --dir .
+
+# or curl
+curl -fSL -o chat-daddy "https://github.com/ELI7VH/chat-daddy/releases/latest/download/$ASSET"
 chmod +x chat-daddy
-```
-
-Replace `ASSET` with the exact name from the table.
-
-### Platform Detection (for agents)
-
-```
-uname -s  → Darwin  = macOS
-uname -s  → Linux   = Linux
-uname -m  → arm64   = ARM (Apple Silicon)
-uname -m  → x86_64  = Intel/AMD
 ```
 
 ## Build from Source (Fallback)

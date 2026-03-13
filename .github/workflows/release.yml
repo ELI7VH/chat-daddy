@@ -15,16 +15,16 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: chat-daddy.exe
+            asset: chat-daddy-windows-x86_64.exe
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: chat-daddy-linux
+            asset: chat-daddy-linux-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: chat-daddy-macos-arm64
+            asset: chat-daddy-darwin-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: chat-daddy-macos-x64
+            asset: chat-daddy-darwin-x86_64
 
     runs-on: ${{ matrix.os }}
 
@@ -47,17 +47,17 @@ jobs:
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
-        run: cp target/${{ matrix.target }}/release/chat-daddy ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/chat-daddy ${{ matrix.asset }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: cp target/${{ matrix.target }}/release/chat-daddy.exe ${{ matrix.artifact }}
+        run: cp target/${{ matrix.target }}/release/chat-daddy.exe ${{ matrix.asset }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
 
   release:
     needs: build

@@ -26,16 +26,16 @@ Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-
 
 Download the prebuilt binary for your platform from [GitHub Releases](https://github.com/ELI7VH/chat-daddy/releases/latest):
 
-| Platform              | Asset name                  |
-|-----------------------|-----------------------------|
-| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
-| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
-| Linux x86_64           | `chat-daddy-linux`         |
-| Windows x86_64         | `chat-daddy.exe`           |
+| Platform               | Binary name                      |
+|------------------------|----------------------------------|
+| macOS ARM64 (M1/M2+)   | `chat-daddy-darwin-arm64`        |
+| macOS x64 (Intel)       | `chat-daddy-darwin-x86_64`       |
+| Linux x86_64            | `chat-daddy-linux-x86_64`        |
+| Windows x86_64          | `chat-daddy-windows-x86_64.exe`  |
 
 ```bash
-# Example: macOS Apple Silicon
-curl -fSL -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/chat-daddy-macos-arm64
+# Auto-detect your platform and download
+curl -fSL -o chat-daddy "https://github.com/ELI7VH/chat-daddy/releases/latest/download/chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"
 chmod +x chat-daddy
 ./chat-daddy
 ```
@@ -59,32 +59,18 @@ Config, sources, and chat metadata auto-generate on first run. No manual setup n
 
 <!-- AGENT INSTRUCTIONS: Read this section if you are an AI coding agent setting up chat-daddy. -->
 
-Download a prebuilt binary from GitHub Releases instead of building from source. Use the **exact asset names** below — do not guess with glob patterns.
-
-### Binary Asset Names
-
-| Platform              | Asset name                  |
-|-----------------------|-----------------------------|
-| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
-| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
-| Linux x86_64           | `chat-daddy-linux`         |
-| Windows x86_64         | `chat-daddy.exe`           |
+Asset names follow a deterministic pattern: `chat-daddy-{os}-{arch}` where `{os}` and `{arch}` match raw `uname` output. An agent can construct the name directly — no lookup table needed.
 
 **Steps:**
-1. Detect OS and arch (`uname -s` / `uname -m` on Unix, or check environment on Windows)
-2. Download the matching binary using the exact asset name from the table — both methods always fetch the **latest** release:
+1. Construct the asset name: `ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"`
+2. Download it:
    ```bash
-   # via gh CLI (always fetches latest)
-   gh release download --repo ELI7VH/chat-daddy --pattern "ASSET" --dir .
-   chmod +x ASSET
-
-   # via curl (GitHub /latest redirect resolves automatically)
-   curl -L -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
+   ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"
+   curl -fSL -o chat-daddy "https://github.com/ELI7VH/chat-daddy/releases/latest/download/$ASSET"
    chmod +x chat-daddy
    ```
-   Replace `ASSET` with the exact name from the table. Do not hardcode version tags.
 3. Place it somewhere on PATH (e.g. `~/.local/bin/`)
-4. If no binary exists for the platform, fall back to `cargo build --release`
+4. If no prebuilt binary exists, fall back to `cargo build --release`
 5. Run it once — config auto-generates at `~/.chat-daddy/config.json`
 
 Binaries are built automatically for **Windows x86_64**, **Linux x86_64**, **macOS ARM64**, and **macOS x64** on every tagged release.
