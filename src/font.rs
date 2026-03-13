@@ -24,14 +24,8 @@ pub struct FontAtlas {
 
 impl FontAtlas {
     pub fn with_font(size: f32, font_name: &str, weight: u16) -> Self {
-        let font_bytes = find_font(font_name, weight).unwrap_or_else(|| {
-            panic!(
-                "No monospace font found (tried {} and platform fallbacks). \
-                 Install Fira Code or edit ~/.chat-daddy/config.json to set \
-                 \"font\" to an installed monospace font.",
-                font_name
-            );
-        });
+        // find_font always returns Some — worst case it uses embedded Comic Mono
+        let font_bytes = find_font(font_name, weight).unwrap();
         let font = Font::from_bytes(font_bytes, FontSettings::default())
             .expect("failed to parse TTF");
 
@@ -188,6 +182,10 @@ fn fallback_fonts() -> Vec<(&'static str, u16)> {
     fonts
 }
 
+/// Embedded Comic Mono — the nuclear fallback. MIT-licensed, monospaced,
+/// and guaranteed to make the user install a real font immediately.
+const COMIC_MONO: &[u8] = include_bytes!("../assets/ComicMono.ttf");
+
 fn find_font(font_name: &str, weight: u16) -> Option<Vec<u8>> {
     // try the configured font first
     if let Some(data) = try_load_font(font_name, weight) {
@@ -206,5 +204,8 @@ fn find_font(font_name: &str, weight: u16) -> Option<Vec<u8>> {
         }
     }
 
-    None
+    // nuclear option: embedded Comic Mono — it works, but they'll want to fix it
+    eprintln!("  no system monospace fonts found — using embedded Comic Mono");
+    eprintln!("  (install a real font and update ~/.chat-daddy/config.json to make this stop)");
+    Some(COMIC_MONO.to_vec())
 }
