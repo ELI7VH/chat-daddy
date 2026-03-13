@@ -16,17 +16,25 @@ Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-
 - **LLM auto-naming** — local Qwen2.5-0.5B names unnamed chats automatically
 - **Configurable theme** — full color palette, font family, and weight via `~/.chat-daddy/config.json`
 - **Keyboard-driven** — search, star, rename, navigate between chats without touching the mouse
-- **LAN peer sync** — instances on different machines discover each other and show remote chats inline (coming soon)
+- **LAN peer sync** — instances on different machines discover each other and show remote chats inline
 
-## Build
+## Setup
 
-Pure Rust. No system libraries required beyond a TTF font (defaults to Fira Code).
+> Tell your AI coding agent to clone it, build it, and set it up. It will read `AGENTS.md` and handle the rest.
 
-```bash
+```
+git clone https://github.com/ELI7VH/chat-daddy.git
+cd chat-daddy
 cargo build --release
+./target/release/chat-daddy      # Linux/macOS
+target\release\chat-daddy.exe    # Windows
 ```
 
-Run: `target/release/chat-daddy.exe` (Windows) or `target/release/chat-daddy` (Linux/macOS).
+**Requirements:**
+- Rust toolchain (`rustup` / `cargo`)
+- A monospace TTF font installed (defaults to [Fira Code](https://github.com/tonsky/FiraCode) Light — configurable in `~/.chat-daddy/config.json`)
+
+Config, sources, and chat metadata auto-generate on first run. No manual setup needed.
 
 ## Controls
 
