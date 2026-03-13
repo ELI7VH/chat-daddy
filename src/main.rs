@@ -6,7 +6,7 @@ mod font;
 use arboard::Clipboard;
 use chrono::{Local, TimeZone};
 use font::FontAtlas;
-use image::{save_buffer, ColorType};
+use image::{save_buffer, ColorType, GenericImageView};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -1525,6 +1525,96 @@ fn fill_rect(
     }
 }
 
+/// Load icon PNG and return as (width, height, Vec<u32>) pixel buffer.
+/// Applies circular mask. Returns None on failure.
+fn load_icon_pixels(size: u32) -> Option<(u32, u32, Vec<u32>)> {
+    // Try relative to exe, then current dir
+    let paths_to_try = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("assets/icon.png"))),
+        Some(PathBuf::from("assets/icon.png")),
+    ];
+    let mut img = None;
+    for p in &paths_to_try {
+        if let Some(ref path) = p {
+            if path.exists() {
+                if let Ok(i) = image::open(path) {
+                    img = Some(i);
+                    break;
+                }
+            }
+        }
+    }
+    let img = img?;
+    // Resize to target size, crop to square first
+    let (w, h) = img.dimensions();
+    let s = w.min(h);
+    let left = (w - s) / 2;
+    let top = (h - s) / 2;
+    let cropped = img.crop_imm(left, top, s, s);
+    let resized = cropped.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+    let rgba = resized.to_rgba8();
+    let mut pixels = Vec::with_capacity((size * size) as usize);
+    let cx = size as f64 / 2.0;
+    let cy = size as f64 / 2.0;
+    let r = size as f64 / 2.0;
+    for y in 0..size {
+        for x in 0..size {
+            let px = rgba.get_pixel(x, y);
+            let dist = ((x as f64 - cx + 0.5).powi(2) + (y as f64 - cy + 0.5).powi(2)).sqrt();
+            if dist > r {
+                pixels.push(0); // transparent (will blend with bg)
+            } else {
+                let a = px[3] as u32;
+                let rv = (px[0] as u32 * a) / 255;
+                let gv = (px[1] as u32 * a) / 255;
+                let bv = (px[2] as u32 * a) / 255;
+                pixels.push((rv << 16) | (gv << 8) | bv | (a << 24));
+            }
+        }
+    }
+    Some((size, size, pixels))
+}
+
+/// Blit an ARGB pixel buffer onto the framebuffer with alpha blending.
+fn blit_icon(
+    buf: &mut [u32],
+    dx: i32,
+    dy: i32,
+    icon: &[u32],
+    icon_w: u32,
+    icon_h: u32,
+    buf_w: usize,
+    buf_h: usize,
+) {
+    for iy in 0..icon_h as i32 {
+        for ix in 0..icon_w as i32 {
+            let sx = dx + ix;
+            let sy = dy + iy;
+            if sx < 0 || sy < 0 || sx as usize >= buf_w || sy as usize >= buf_h {
+                continue;
+            }
+            let src = icon[(iy as u32 * icon_w + ix as u32) as usize];
+            let a = (src >> 24) & 0xFF;
+            if a == 0 {
+                continue;
+            }
+            let dst_idx = sy as usize * buf_w + sx as usize;
+            if a == 255 {
+                buf[dst_idx] = src & 0x00FFFFFF;
+            } else {
+                let bg = buf[dst_idx];
+                let inv_a = 255 - a;
+                let r = (((src >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * inv_a) / 255;
+                let g = (((src >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * inv_a) / 255;
+                let b = ((src & 0xFF) * a + (bg & 0xFF) * inv_a) / 255;
+                buf[dst_idx] = (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
 // --- search / filter ---
 
 fn file_contains_text(path: &Path, query_lower: &str) -> bool {
@@ -1973,6 +2063,9 @@ fn main() {
     )
     .expect("window");
     window.set_target_fps(60);
+
+    // Load icon pixels for help overlay (48px circle-cropped)
+    let help_icon: Option<(u32, u32, Vec<u32>)> = load_icon_pixels(48);
 
     let all_transcripts = get_all_transcripts(&sources);
     let mut chats = load_chats();
@@ -3119,54 +3212,100 @@ fn main() {
 
         // ===== HELP OVERLAY =====
         if show_help {
-            let help_lines: &[&str] = match &state {
+            let hotkeys: &[&str] = match &state {
                 AppState::List { .. } => &[
-                    "HOTKEYS — LIST",
-                    "",
                     "  Up/Down      navigate",
                     "  Enter        open chat",
-                    "  Left/Right   (in view) prev/next chat",
+                    "  Left/Right   prev/next chat",
                     "  S            search",
                     "  N            rename chat",
                     "  Space        multi-select",
-                    "  F            star/unstar (bulk if selected)",
+                    "  F            star/unstar",
                     "  Shift+F      toggle favs filter",
-                    "  Ctrl+E       export selected chats",
-                    "  Ctrl+/−      font size",
-                    "  Esc          clear selection / quit",
-                    "  ?            toggle this help",
+                    "  Ctrl+E       export selected",
+                    "  Ctrl+/\u{2212}      font size",
+                    "  Esc          clear / quit",
+                    "  ?            toggle help",
                 ],
                 AppState::View { .. } => &[
-                    "HOTKEYS — VIEW",
-                    "",
                     "  Up/Down      scroll",
                     "  PgUp/PgDn    fast scroll",
-                    "  Home/End     jump top/bottom",
+                    "  Home/End     top/bottom",
                     "  Left/Right   prev/next chat",
                     "  Ctrl+C       copy selection",
                     "  Ctrl+A       select all",
-                    "  Ctrl+/−      font size",
+                    "  Ctrl+/\u{2212}      font size",
                     "  Esc          back to list",
-                    "  ?            toggle this help",
+                    "  ?            toggle help",
                 ],
             };
-            let panel_w = 40 * advance;
-            let panel_h = (help_lines.len() as i32 + 2) * lh;
+            let icon_size: i32 = if help_icon.is_some() { 48 } else { 0 };
+            let icon_gap: i32 = if help_icon.is_some() { 8 } else { 0 };
+            let title = "chat-daddy";
+            let mode_label = match &state {
+                AppState::List { .. } => "LIST",
+                AppState::View { .. } => "VIEW",
+            };
+            let footer = "lucianlabs.ca";
+            // Calculate panel dimensions
+            let panel_w = 38 * advance;
+            // Layout: icon + gap + title + gap + mode label + sep + hotkeys + sep + footer
+            let sep_h = 1;
+            let gap = lh / 2; // half-line gap around separators
+            let mut total_h: i32 = 0;
+            total_h += icon_size + icon_gap; // icon
+            total_h += lh; // title "chat-daddy"
+            total_h += lh / 2; // mode label line (smaller gap)
+            total_h += gap + sep_h + gap; // separator 1
+            total_h += hotkeys.len() as i32 * lh; // hotkeys
+            total_h += gap + sep_h + gap; // separator 2
+            total_h += lh; // footer
+
             let px = (win_w as i32 - panel_w) / 2;
-            let py = (win_h as i32 - panel_h) / 2;
+            let py = (win_h as i32 - total_h) / 2;
+            let pad2 = PAD * 2;
             // dark background
-            fill_rect(&mut buffer, px - PAD, py - PAD, panel_w + 2 * PAD, panel_h + 2 * PAD, c_header_bg, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py - pad2, panel_w + 4 * PAD, total_h + 4 * PAD, c_header_bg, buf_w, buf_h);
             // border
-            fill_rect(&mut buffer, px - PAD, py - PAD, panel_w + 2 * PAD, 1, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px - PAD, py + panel_h + PAD, panel_w + 2 * PAD, 1, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px - PAD, py - PAD, 1, panel_h + 2 * PAD, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px + panel_w + PAD, py - PAD, 1, panel_h + 2 * PAD, c_sep, buf_w, buf_h);
-            for (i, line) in help_lines.iter().enumerate() {
-                let color = if i == 0 { c_accent } else { c_text };
-                draw_text_ttf(
-                    &mut buffer, px, py + (i as i32) * lh, line, color, &mut atlas, buf_w, buf_h,
-                );
+            fill_rect(&mut buffer, px - pad2, py - pad2, panel_w + 4 * PAD, 1, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py + total_h + pad2, panel_w + 4 * PAD, 1, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py - pad2, 1, total_h + 4 * PAD, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px + panel_w + pad2, py - pad2, 1, total_h + 4 * PAD + 1, c_sep, buf_w, buf_h);
+
+            let mut cy = py;
+            // Icon (centered)
+            if let Some((iw, ih, ref icon_pixels)) = help_icon {
+                let icon_x = px + (panel_w - iw as i32) / 2;
+                blit_icon(&mut buffer, icon_x, cy, icon_pixels, iw, ih, buf_w, buf_h);
+                cy += icon_size + icon_gap;
             }
+            // Title "chat-daddy" (centered)
+            let title_w = title.len() as i32 * advance;
+            let title_x = px + (panel_w - title_w) / 2;
+            draw_text_ttf(&mut buffer, title_x, cy, title, c_accent, &mut atlas, buf_w, buf_h);
+            cy += lh;
+            // Mode label (centered, dim)
+            let mode_w = mode_label.len() as i32 * advance;
+            let mode_x = px + (panel_w - mode_w) / 2;
+            draw_text_ttf(&mut buffer, mode_x, cy, mode_label, c_dim, &mut atlas, buf_w, buf_h);
+            cy += lh / 2;
+            // Separator 1
+            cy += gap;
+            fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
+            cy += sep_h + gap;
+            // Hotkeys
+            for line in hotkeys {
+                draw_text_ttf(&mut buffer, px, cy, line, c_text, &mut atlas, buf_w, buf_h);
+                cy += lh;
+            }
+            // Separator 2
+            cy += gap;
+            fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
+            cy += sep_h + gap;
+            // Footer "lucianlabs.ca" (centered, dim)
+            let footer_w = footer.len() as i32 * advance;
+            let footer_x = px + (panel_w - footer_w) / 2;
+            draw_text_ttf(&mut buffer, footer_x, cy, footer, c_dim, &mut atlas, buf_w, buf_h);
         }
 
         if snapshot {
