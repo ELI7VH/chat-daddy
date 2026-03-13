@@ -1997,6 +1997,7 @@ fn main() {
     let mut mouse_dragging = false;
     let mut needs_rebuild = false;
     let mut show_help = false;
+    let mut multi_selected: HashSet<String> = HashSet::new(); // UUIDs of multi-selected chats
     let llm_endpoint = cfg.llm_endpoint;
     let mut llm_healthy = false;
     let mut llm_last_check = Instant::now() - std::time::Duration::from_secs(60); // force first check
@@ -2353,6 +2354,47 @@ fn main() {
                         }
                         continue;
                     }
+                    Key::E => {
+                        // export multi-selected chats (or current chat in view)
+                        if let AppState::List { filtered, .. } = &state {
+                            if !multi_selected.is_empty() {
+                                let mut export: Vec<Value> = Vec::new();
+                                for entry in filtered.iter() {
+                                    if !multi_selected.contains(&entry.uuid) {
+                                        continue;
+                                    }
+                                    let msgs = match &entry.remote {
+                                        Some(origin) => fetch_remote_messages(origin.tcp_addr, &entry.uuid),
+                                        None => load_messages(&entry.path, &entry.source_format),
+                                    };
+                                    let name = chats.get(&entry.uuid).and_then(|m| m.name.as_ref()).cloned();
+                                    for m in &msgs {
+                                        export.push(serde_json::json!({
+                                            "timestamp": m.timestamp,
+                                            "platform": entry.project,
+                                            "role": m.role,
+                                            "text": m.text,
+                                            "meta": {
+                                                "uuid": entry.uuid,
+                                                "name": name,
+                                            }
+                                        }));
+                                    }
+                                }
+                                export.sort_by_key(|v| v.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0));
+                                if let Ok(json) = serde_json::to_string_pretty(&export) {
+                                    // save to ~/.chat-daddy/export.json and copy to clipboard
+                                    let export_path = chat_daddy_dir().join("export.json");
+                                    let _ = fs::write(&export_path, &json);
+                                    if let Some(ref mut cb) = clipboard {
+                                        let _ = cb.set_text(&json);
+                                    }
+                                }
+                                multi_selected.clear();
+                            }
+                        }
+                        continue;
+                    }
                     _ => {}
                 }
             }
@@ -2456,6 +2498,8 @@ fn main() {
                             Key::Escape => {
                                 if show_help {
                                     show_help = false;
+                                } else if !multi_selected.is_empty() {
+                                    multi_selected.clear();
                                 } else {
                                     return;
                                 }
@@ -2476,6 +2520,20 @@ fn main() {
                                     }
                                 }
                             }
+                            Key::Space => {
+                                // toggle multi-select on current item
+                                if let Some(entry) = filtered.get(*selected) {
+                                    let uuid = entry.uuid.clone();
+                                    if multi_selected.contains(&uuid) {
+                                        multi_selected.remove(&uuid);
+                                    } else {
+                                        multi_selected.insert(uuid);
+                                    }
+                                    // advance cursor
+                                    *selected =
+                                        (*selected + 1).min(filtered.len().saturating_sub(1));
+                                }
+                            }
                             Key::S => {
                                 *searching = true;
                                 search_term.clear();
@@ -2492,7 +2550,29 @@ fn main() {
                                 *scroll = 0;
                             }
                             Key::F => {
-                                if let Some(entry) = filtered.get(*selected) {
+                                if !multi_selected.is_empty() {
+                                    // bulk star/unstar all selected
+                                    // if any are unstarred, star them all; otherwise unstar all
+                                    let any_unstarred = multi_selected.iter().any(|uuid| {
+                                        !chats.get(uuid).map_or(false, |m| m.starred)
+                                    });
+                                    for uuid in &multi_selected {
+                                        let meta = chats.entry(uuid.clone()).or_insert_with(ChatMeta::default);
+                                        meta.starred = any_unstarred;
+                                    }
+                                    save_chats(&chats);
+                                    multi_selected.clear();
+                                    if *favs_only {
+                                        *filtered = filter_transcripts_quick(
+                                            transcripts,
+                                            search_term,
+                                            true,
+                                            &chats,
+                                        );
+                                        *selected =
+                                            (*selected).min(filtered.len().saturating_sub(1));
+                                    }
+                                } else if let Some(entry) = filtered.get(*selected) {
                                     let uuid = entry.uuid.clone();
                                     let meta = chats.entry(uuid).or_insert_with(ChatMeta::default);
                                     meta.starred = !meta.starred;
@@ -2698,6 +2778,7 @@ fn main() {
                         None => continue,
                     };
                     let is_selected = i == *selected;
+                    let is_multi = multi_selected.contains(&t.uuid);
                     if is_selected && sub == 0 {
                         fill_rect(
                             &mut buffer,
@@ -2709,11 +2790,25 @@ fn main() {
                             buf_w,
                             buf_h,
                         );
+                    } else if is_multi && sub == 0 {
+                        // subtle highlight for multi-selected items
+                        fill_rect(
+                            &mut buffer,
+                            0,
+                            y,
+                            win_w as i32,
+                            lh * 3,
+                            c_select_bg,
+                            buf_w,
+                            buf_h,
+                        );
                     }
                     match sub {
                         0 => {
                             // Left side: star + display name (or preview fallback)
-                            let star = if chats.get(&t.uuid).map_or(false, |m| m.starred) {
+                            let star = if is_multi {
+                                "> "
+                            } else if chats.get(&t.uuid).map_or(false, |m| m.starred) {
                                 "* "
                             } else {
                                 "  "
@@ -2966,7 +3061,11 @@ fn main() {
                             &mut buffer, sx, header_y, &prompt, c_text, &mut atlas, buf_w, buf_h,
                         );
                     } else {
-                        let count_str = format!("{} chats  ?", filtered.len());
+                        let count_str = if multi_selected.is_empty() {
+                            format!("{} chats  ?", filtered.len())
+                        } else {
+                            format!("{} selected  Ctrl+E export  ?", multi_selected.len())
+                        };
                         let hint_w = count_str.len() as i32 * advance;
                         draw_text_ttf(
                             &mut buffer,
@@ -3029,10 +3128,12 @@ fn main() {
                     "  Left/Right   (in view) prev/next chat",
                     "  S            search",
                     "  N            rename chat",
-                    "  F            star/unstar",
+                    "  Space        multi-select",
+                    "  F            star/unstar (bulk if selected)",
                     "  Shift+F      toggle favs filter",
+                    "  Ctrl+E       export selected chats",
                     "  Ctrl+/−      font size",
-                    "  Esc          quit",
+                    "  Esc          clear selection / quit",
                     "  ?            toggle this help",
                 ],
                 AppState::View { .. } => &[
