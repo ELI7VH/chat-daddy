@@ -12,8 +12,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read as IoRead, Write as IoWrite};
+use std::net::{TcpListener, TcpStream, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
 const WIN_W: usize = 1000;
@@ -597,6 +600,12 @@ fn llm_is_healthy(endpoint: &str) -> bool {
 // --- transcript data ---
 
 #[derive(Clone)]
+struct RemoteOrigin {
+    hostname: String,
+    tcp_addr: SocketAddr,
+}
+
+#[derive(Clone)]
 struct TranscriptEntry {
     path: PathBuf,
     uuid: String,
@@ -605,6 +614,24 @@ struct TranscriptEntry {
     mtime_secs: u64,
     preview: String,
     timestamp: String,
+    remote: Option<RemoteOrigin>,
+}
+
+// --- LAN peer sync ---
+
+const LAN_PORT: u16 = 21847;
+
+struct PeerInfo {
+    hostname: String,
+    #[allow(dead_code)]
+    tcp_port: u16,
+    last_seen: Instant,
+}
+
+struct PeerState {
+    peers: HashMap<SocketAddr, PeerInfo>,
+    remote_entries: Vec<TranscriptEntry>,
+    dirty: bool,
 }
 
 fn format_timestamp(secs: u64) -> String {
@@ -770,6 +797,7 @@ fn make_entry(path: PathBuf, source_name: &str, format: SourceFormat) -> Option<
         mtime_secs,
         preview,
         timestamp,
+        remote: None,
     })
 }
 
@@ -1685,6 +1713,8 @@ enum AppState {
         sel: Selection,
         file_mtime: u64,
         last_check: Instant,
+        remote: Option<RemoteOrigin>,
+        chat_uuid: String,
     },
 }
 
@@ -1699,6 +1729,229 @@ fn rebuild_view(
     let (lines, meta) = flatten_groups(groups, expanded, wrap_w);
     let in_code = compute_code_block_state(&lines);
     (lines, meta, in_code)
+}
+
+// --- LAN peer sync functions ---
+
+fn get_hostname() -> String {
+    env::var("COMPUTERNAME")
+        .or_else(|_| env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+fn start_tcp_server(listener: TcpListener, sources: Vec<SourceConfig>) {
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let srcs = sources.clone();
+            thread::spawn(move || {
+                handle_tcp_client(stream, &srcs);
+            });
+        }
+    });
+}
+
+fn handle_tcp_client(stream: TcpStream, sources: &[SourceConfig]) {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let Ok(write_stream) = stream.try_clone() else { return };
+    let mut writer = write_stream;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    if reader.read_line(&mut line).is_err() {
+        return;
+    }
+    let line = line.trim().to_string();
+    if line == "LIST" {
+        let transcripts = get_all_transcripts(sources);
+        let arr: Vec<Value> = transcripts.iter().map(|t| {
+            serde_json::json!({
+                "uuid": t.uuid,
+                "project": t.project,
+                "mtime": t.mtime_secs,
+                "preview": t.preview,
+                "timestamp": t.timestamp,
+            })
+        }).collect();
+        let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into());
+        let _ = writer.write_all(json.as_bytes());
+        let _ = writer.write_all(b"\n");
+    } else if let Some(uuid) = line.strip_prefix("GET ") {
+        let uuid = uuid.trim();
+        // find the transcript by uuid
+        let transcripts = get_all_transcripts(sources);
+        if let Some(entry) = transcripts.iter().find(|t| t.uuid == uuid) {
+            let msgs = load_messages(&entry.path, &entry.source_format);
+            let arr: Vec<Value> = msgs.iter().map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "text": m.text,
+                    "timestamp": m.timestamp,
+                })
+            }).collect();
+            let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into());
+            let _ = writer.write_all(json.as_bytes());
+            let _ = writer.write_all(b"\n");
+        } else {
+            let _ = writer.write_all(b"[]\n");
+        }
+    }
+}
+
+fn start_beacon_sender(hostname: String, tcp_port: u16) {
+    thread::spawn(move || {
+        let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return };
+        let _ = sock.set_broadcast(true);
+        let beacon = format!(
+            "{{\"h\":\"{}\",\"p\":{},\"v\":\"0.1.0\"}}\n",
+            hostname, tcp_port
+        );
+        let dest: SocketAddr = format!("255.255.255.255:{}", LAN_PORT).parse().unwrap();
+        loop {
+            let _ = sock.send_to(beacon.as_bytes(), dest);
+            thread::sleep(std::time::Duration::from_secs(3));
+        }
+    });
+}
+
+fn start_beacon_listener(peer_state: Arc<Mutex<PeerState>>, my_hostname: String) {
+    thread::spawn(move || {
+        let Ok(sock) = UdpSocket::bind(format!("0.0.0.0:{}", LAN_PORT)) else { return };
+        let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+        let mut buf = [0u8; 1024];
+        loop {
+            match sock.recv_from(&mut buf) {
+                Ok((n, src_addr)) => {
+                    let msg = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let msg = msg.trim();
+                    let Ok(val) = serde_json::from_str::<Value>(msg) else { continue };
+                    let Some(h) = val.get("h").and_then(|v| v.as_str()) else { continue };
+                    let Some(p) = val.get("p").and_then(|v| v.as_u64()) else { continue };
+                    if h == my_hostname {
+                        continue; // skip self
+                    }
+                    let tcp_port = p as u16;
+                    let peer_tcp_addr: SocketAddr = SocketAddr::new(src_addr.ip(), tcp_port);
+                    let mut changed = false;
+                    if let Ok(mut ps) = peer_state.lock() {
+                        let is_new = !ps.peers.contains_key(&peer_tcp_addr);
+                        ps.peers.insert(peer_tcp_addr, PeerInfo {
+                            hostname: h.to_string(),
+                            tcp_port,
+                            last_seen: Instant::now(),
+                        });
+                        // evict stale peers
+                        let before = ps.peers.len();
+                        ps.peers.retain(|_, info| info.last_seen.elapsed().as_secs() < 9);
+                        let after = ps.peers.len();
+                        if is_new || before != after {
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        // fetch LIST from all live peers
+                        let addrs: Vec<(SocketAddr, String)> = {
+                            let Ok(ps) = peer_state.lock() else { continue };
+                            ps.peers.iter().map(|(addr, info)| (*addr, info.hostname.clone())).collect()
+                        };
+                        let mut all_remote = Vec::new();
+                        for (addr, hostname) in &addrs {
+                            let entries = fetch_peer_list(*addr, hostname);
+                            all_remote.extend(entries);
+                        }
+                        if let Ok(mut ps) = peer_state.lock() {
+                            ps.remote_entries = all_remote;
+                            ps.dirty = true;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // timeout — evict stale peers
+                    let mut changed = false;
+                    if let Ok(mut ps) = peer_state.lock() {
+                        let before = ps.peers.len();
+                        ps.peers.retain(|_, info| info.last_seen.elapsed().as_secs() < 9);
+                        if ps.peers.len() != before {
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        let addrs: Vec<(SocketAddr, String)> = {
+                            let Ok(ps) = peer_state.lock() else { continue };
+                            ps.peers.iter().map(|(addr, info)| (*addr, info.hostname.clone())).collect()
+                        };
+                        let mut all_remote = Vec::new();
+                        for (addr, hostname) in &addrs {
+                            let entries = fetch_peer_list(*addr, hostname);
+                            all_remote.extend(entries);
+                        }
+                        if let Ok(mut ps) = peer_state.lock() {
+                            ps.remote_entries = all_remote;
+                            ps.dirty = true;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
+        return vec![];
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    if stream.write_all(b"LIST\n").is_err() {
+        return vec![];
+    }
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let response = response.trim();
+    let Ok(arr) = serde_json::from_str::<Vec<Value>>(response) else {
+        return vec![];
+    };
+    arr.iter().filter_map(|v| {
+        let uuid = v.get("uuid")?.as_str()?.to_string();
+        let project = v.get("project")?.as_str()?.to_string();
+        let mtime = v.get("mtime")?.as_u64().unwrap_or(0);
+        let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        let timestamp = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        Some(TranscriptEntry {
+            path: PathBuf::new(),
+            uuid,
+            project,
+            source_format: SourceFormat::Generic,
+            mtime_secs: mtime,
+            preview,
+            timestamp,
+            remote: Some(RemoteOrigin {
+                hostname: hostname.to_string(),
+                tcp_addr: addr,
+            }),
+        })
+    }).collect()
+}
+
+fn fetch_remote_messages(addr: SocketAddr, uuid: &str) -> Vec<MessageLine> {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
+        return vec![];
+    };
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let cmd = format!("GET {}\n", uuid);
+    if stream.write_all(cmd.as_bytes()).is_err() {
+        return vec![];
+    }
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    let response = response.trim();
+    let Ok(arr) = serde_json::from_str::<Vec<Value>>(response) else {
+        return vec![];
+    };
+    arr.iter().filter_map(|v| {
+        let role = v.get("role")?.as_str()?.to_string();
+        let text = v.get("text")?.as_str()?.to_string();
+        let timestamp = v.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0);
+        Some(MessageLine { role, text, timestamp })
+    }).collect()
 }
 
 fn main() {
@@ -1748,6 +2001,26 @@ fn main() {
     let mut llm_healthy = false;
     let mut llm_last_check = Instant::now() - std::time::Duration::from_secs(60); // force first check
     let mut auto_name_last = Instant::now() - std::time::Duration::from_secs(60);
+
+    // --- LAN peer sync setup ---
+    let my_hostname = get_hostname();
+    let tcp_listener = TcpListener::bind("0.0.0.0:0").ok();
+    let my_tcp_port = tcp_listener.as_ref().map(|l| l.local_addr().unwrap().port()).unwrap_or(0);
+    let peer_state = Arc::new(Mutex::new(PeerState {
+        peers: HashMap::new(),
+        remote_entries: Vec::new(),
+        dirty: false,
+    }));
+
+    if let Some(listener) = tcp_listener {
+        start_tcp_server(listener, sources.clone());
+    }
+    if my_tcp_port > 0 {
+        start_beacon_sender(my_hostname.clone(), my_tcp_port);
+        start_beacon_listener(Arc::clone(&peer_state), my_hostname.clone());
+    }
+
+    let mut last_merged: Vec<TranscriptEntry> = Vec::new();
 
     // theme-derived color aliases (lowercase, used by render code)
     let c_bg = theme.bg;
@@ -1802,12 +2075,24 @@ fn main() {
             } => {
                 if last_scan.elapsed().as_secs() >= 2 {
                     *last_scan = Instant::now();
-                    let fresh = get_all_transcripts(&sources);
+                    let mut fresh = get_all_transcripts(&sources);
+
+                    // merge remote peers
+                    if let Ok(mut ps) = peer_state.try_lock() {
+                        ps.dirty = false;
+                        let remote = ps.remote_entries.clone();
+                        fresh.extend(remote);
+                        fresh.sort_by(|a, b| b.mtime_secs.cmp(&a.mtime_secs));
+                    }
+
+                    last_merged = fresh.clone();
+
                     if fresh.len() != transcripts.len()
                         || fresh
                             .first()
                             .map(|t| t.mtime_secs)
                             != transcripts.first().map(|t| t.mtime_secs)
+                        || fresh.iter().any(|t| t.remote.is_some()) != transcripts.iter().any(|t| t.remote.is_some())
                     {
                         *transcripts = fresh.clone();
                         *filtered = filter_transcripts_quick(
@@ -1837,24 +2122,45 @@ fn main() {
                 scroll,
                 file_mtime,
                 last_check,
-                ..
+                remote,
+                chat_uuid,
+                sel: _,
             } => {
                 if last_check.elapsed().as_secs() >= 1 {
                     *last_check = Instant::now();
-                    let new_mtime = get_file_mtime(path);
-                    if new_mtime != *file_mtime {
-                        *file_mtime = new_mtime;
-                        let msgs = load_messages(path, source_format);
-                        *groups = group_messages(&msgs);
-                        let wrap_w = chars_per_line(win_w, advance);
-                        let (nl, nm, nc) = rebuild_view(groups, expanded, wrap_w);
-                        *lines = nl;
-                        *line_meta = nm;
-                        *in_code = nc;
-                        *last_wrap_w = wrap_w;
-                        // scroll to bottom
-                        let visible = ((win_h as i32) - content_top - PAD) / lh;
-                        *scroll = (lines.len() as i32 - visible).max(0);
+                    match remote {
+                        Some(origin) => {
+                            // re-fetch from peer
+                            let msgs = fetch_remote_messages(origin.tcp_addr, chat_uuid);
+                            if !msgs.is_empty() {
+                                *groups = group_messages(&msgs);
+                                let wrap_w = chars_per_line(win_w, advance);
+                                let (nl, nm, nc) = rebuild_view(groups, expanded, wrap_w);
+                                *lines = nl;
+                                *line_meta = nm;
+                                *in_code = nc;
+                                *last_wrap_w = wrap_w;
+                                let visible = ((win_h as i32) - content_top - PAD) / lh;
+                                *scroll = (lines.len() as i32 - visible).max(0);
+                            }
+                        }
+                        None => {
+                            let new_mtime = get_file_mtime(path);
+                            if new_mtime != *file_mtime {
+                                *file_mtime = new_mtime;
+                                let msgs = load_messages(path, source_format);
+                                *groups = group_messages(&msgs);
+                                let wrap_w = chars_per_line(win_w, advance);
+                                let (nl, nm, nc) = rebuild_view(groups, expanded, wrap_w);
+                                *lines = nl;
+                                *line_meta = nm;
+                                *in_code = nc;
+                                *last_wrap_w = wrap_w;
+                                // scroll to bottom
+                                let visible = ((win_h as i32) - content_top - PAD) / lh;
+                                *scroll = (lines.len() as i32 - visible).max(0);
+                            }
+                        }
                     }
                 }
             }
@@ -2213,7 +2519,10 @@ fn main() {
                             Key::Enter => {
                                 if let Some(entry) = filtered.get(*selected).cloned() {
                                     let fmt = entry.source_format.clone();
-                                    let msgs = load_messages(&entry.path, &fmt);
+                                    let msgs = match &entry.remote {
+                                        Some(origin) => fetch_remote_messages(origin.tcp_addr, &entry.uuid),
+                                        None => load_messages(&entry.path, &fmt),
+                                    };
                                     let groups = group_messages(&msgs);
                                     let expanded = HashSet::new();
                                     let wrap_w = chars_per_line(win_w, advance);
@@ -2223,6 +2532,7 @@ fn main() {
                                     let visible = ((win_h as i32) - content_top - PAD) / lh;
                                     let scroll = (lines.len() as i32 - visible).max(0);
                                     let mtime = get_file_mtime(&entry.path);
+                                    let chat_uuid = entry.uuid.clone();
                                     transition = Some(AppState::View {
                                         path: entry.path,
                                         source_format: fmt,
@@ -2236,6 +2546,8 @@ fn main() {
                                         sel: Selection::default(),
                                         file_mtime: mtime,
                                         last_check: Instant::now(),
+                                        remote: entry.remote.clone(),
+                                        chat_uuid,
                                     });
                                 }
                             }
@@ -2249,7 +2561,7 @@ fn main() {
                         .min((total_lines - visible_lines).max(0));
                 }
                 AppState::View {
-                    path, source_format: _, lines, scroll, sel, ..
+                    path: _, source_format: _, lines, scroll, sel, chat_uuid, ..
                 } => match key {
                     Key::Escape => {
                         if show_help {
@@ -2273,9 +2585,9 @@ fn main() {
                         }
                     }
                     Key::Left | Key::Right => {
-                        // navigate to prev/next chat
-                        let all = get_all_transcripts(&sources);
-                        if let Some(idx) = all.iter().position(|t| t.path == *path) {
+                        // navigate to prev/next chat using last_merged list
+                        let all = last_merged.clone();
+                        if let Some(idx) = all.iter().position(|t| t.uuid == *chat_uuid) {
                             let next_idx = if key == Key::Left {
                                 if idx == 0 { all.len() - 1 } else { idx - 1 }
                             } else {
@@ -2283,7 +2595,10 @@ fn main() {
                             };
                             if let Some(entry) = all.get(next_idx).cloned() {
                                 let fmt = entry.source_format.clone();
-                                let msgs = load_messages(&entry.path, &fmt);
+                                let msgs = match &entry.remote {
+                                    Some(origin) => fetch_remote_messages(origin.tcp_addr, &entry.uuid),
+                                    None => load_messages(&entry.path, &fmt),
+                                };
                                 let groups = group_messages(&msgs);
                                 let expanded = HashSet::new();
                                 let wrap_w = chars_per_line(win_w, advance);
@@ -2292,6 +2607,7 @@ fn main() {
                                 let visible = ((win_h as i32) - content_top - PAD) / lh;
                                 let scroll = (lines.len() as i32 - visible).max(0);
                                 let mtime = get_file_mtime(&entry.path);
+                                let nav_uuid = entry.uuid.clone();
                                 transition = Some(AppState::View {
                                     path: entry.path,
                                     source_format: fmt,
@@ -2305,6 +2621,8 @@ fn main() {
                                     sel: Selection::default(),
                                     file_mtime: mtime,
                                     last_check: Instant::now(),
+                                    remote: entry.remote.clone(),
+                                    chat_uuid: nav_uuid,
                                 });
                             }
                         }
@@ -2421,7 +2739,11 @@ fn main() {
                                 buf_h,
                             );
 
-                            // Right side: [platform]  [hash]  [timestamp]
+                            // Right side: [hostname · platform]  [hash]  [timestamp]
+                            let project_display = match &t.remote {
+                                Some(origin) => format!("{} · {}", origin.hostname, t.project),
+                                None => t.project.clone(),
+                            };
                             let uuid_short = if t.uuid.len() >= 8 {
                                 &t.uuid[..8]
                             } else {
@@ -2429,7 +2751,7 @@ fn main() {
                             };
                             let right = format!(
                                 "{}  {}  {}",
-                                t.project, uuid_short, t.timestamp
+                                project_display, uuid_short, t.timestamp
                             );
                             let right_w = right.len() as i32 * advance;
                             draw_text_ttf(
@@ -2658,13 +2980,14 @@ fn main() {
                         );
                     }
                 }
-                AppState::View { path, .. } => {
+                AppState::View { path, chat_uuid, remote, .. } => {
                     let title = path
                         .file_stem()
                         .map(|s| s.to_string_lossy())
                         .unwrap_or_default();
                     // show chat name if available, else uuid
-                    let uuid_str = title.to_string();
+                    let uuid_str = if chat_uuid.is_empty() { title.to_string() } else { chat_uuid.clone() };
+                    let _remote_label = remote.as_ref().map(|o| o.hostname.clone());
                     let display = chats
                         .get(&uuid_str)
                         .and_then(|m| m.name.as_deref())
