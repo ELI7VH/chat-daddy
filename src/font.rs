@@ -26,8 +26,10 @@ impl FontAtlas {
     pub fn with_font(size: f32, font_name: &str, weight: u16) -> Self {
         let font_bytes = find_font(font_name, weight).unwrap_or_else(|| {
             panic!(
-                "{} (weight {}) not found — install it to system fonts",
-                font_name, weight
+                "No monospace font found (tried {} and platform fallbacks). \
+                 Install Fira Code or edit ~/.chat-daddy/config.json to set \
+                 \"font\" to an installed monospace font.",
+                font_name
             );
         });
         let font = Font::from_bytes(font_bytes, FontSettings::default())
@@ -95,34 +97,111 @@ fn weight_fallbacks(weight: u16) -> Vec<&'static str> {
     out
 }
 
-fn find_font(font_name: &str, weight: u16) -> Option<Vec<u8>> {
-    let home = std::env::var("USERPROFILE").unwrap_or_default();
-    // normalize font name: "Fira Code" -> "FiraCode"
-    let file_base: String = font_name.split_whitespace().collect();
+/// Platform-specific font directories
+fn font_dirs() -> Vec<String> {
+    let mut dirs = Vec::new();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
 
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(format!("{}/Library/Fonts", home));
+        dirs.push("/Library/Fonts".to_string());
+        dirs.push("/System/Library/Fonts".to_string());
+        dirs.push("/System/Library/Fonts/Supplemental".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push(format!("{}/.local/share/fonts", home));
+        dirs.push(format!("{}/.fonts", home));
+        dirs.push("/usr/share/fonts/truetype".to_string());
+        dirs.push("/usr/local/share/fonts".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        dirs.push("C:/Windows/Fonts".to_string());
+        dirs.push(format!(
+            "{}/AppData/Local/Microsoft/Windows/Fonts",
+            home
+        ));
+    }
+
+    dirs
+}
+
+/// Try to load a named font from system font dirs with weight fallbacks
+fn try_load_font(font_name: &str, weight: u16) -> Option<Vec<u8>> {
+    let file_base: String = font_name.split_whitespace().collect();
+    let dirs = font_dirs();
     let suffixes = weight_fallbacks(weight);
 
+    // try each weight suffix
     for suffix in &suffixes {
         let filename = format!("{}-{}.ttf", file_base, suffix);
-        let candidates = [
-            format!("C:/Windows/Fonts/{}", filename),
-            format!("{}/AppData/Local/Microsoft/Windows/Fonts/{}", home, filename),
-        ];
-        for path in &candidates {
-            if let Ok(data) = fs::read(path) {
+        for dir in &dirs {
+            let path = format!("{}/{}", dir, filename);
+            if let Ok(data) = fs::read(&path) {
                 return Some(data);
             }
         }
     }
 
-    // last resort: try the bare name
+    // try bare name (e.g. "FiraCode.ttf")
     let bare = format!("{}.ttf", file_base);
-    let bare_paths = [
-        format!("C:/Windows/Fonts/{}", bare),
-        format!("{}/AppData/Local/Microsoft/Windows/Fonts/{}", home, bare),
-    ];
-    for path in &bare_paths {
-        if let Ok(data) = fs::read(path) {
+    for dir in &dirs {
+        let path = format!("{}/{}", dir, bare);
+        if let Ok(data) = fs::read(&path) {
+            return Some(data);
+        }
+    }
+
+    None
+}
+
+/// Common monospace fonts to try as fallbacks, per platform
+fn fallback_fonts() -> Vec<(&'static str, u16)> {
+    let mut fonts = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        fonts.push(("SF Mono", 400));
+        fonts.push(("Menlo", 400));
+        fonts.push(("Monaco", 400));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        fonts.push(("DejaVu Sans Mono", 400));
+        fonts.push(("Liberation Mono", 400));
+        fonts.push(("Ubuntu Mono", 400));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        fonts.push(("Consolas", 400));
+        fonts.push(("Courier New", 400));
+    }
+
+    fonts
+}
+
+fn find_font(font_name: &str, weight: u16) -> Option<Vec<u8>> {
+    // try the configured font first
+    if let Some(data) = try_load_font(font_name, weight) {
+        return Some(data);
+    }
+
+    // fall back to platform-default monospace fonts
+    eprintln!(
+        "warning: {} (weight {}) not found — trying fallback fonts",
+        font_name, weight
+    );
+    for (name, w) in fallback_fonts() {
+        if let Some(data) = try_load_font(name, w) {
+            eprintln!("  using fallback font: {}", name);
             return Some(data);
         }
     }
