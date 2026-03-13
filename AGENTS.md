@@ -6,9 +6,29 @@ Instructions for AI coding agents working with this repository.
 
 Chat Daddy is a minimal, keyboard-driven chat transcript viewer for AI coding assistants (Claude Code, Cursor, Codex). Pixel-buffer rendered with minifb, no GPU. Rust only.
 
-## Build
+## Install (Preferred — No Rust Required)
+
+Check GitHub Releases first. If a prebuilt binary exists for the user's platform, use it instead of building from source.
 
 ```bash
+# Download latest release binary (example: Windows)
+gh release download --repo ELI7VH/chat-daddy --pattern "chat-daddy.exe" --dir .
+
+# Or via curl (replace v0.1.0 with latest tag)
+curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download/v0.1.0/chat-daddy.exe
+```
+
+Place the binary somewhere on PATH (e.g. `~/.local/bin/` on Linux, or any folder on Windows). Run it — config auto-generates on first launch.
+
+Available binaries: **Windows x86_64**. Other platforms: build from source (see below).
+
+## Build from Source (Fallback)
+
+Only needed if no prebuilt binary exists for the user's OS/arch.
+
+```bash
+git clone https://github.com/ELI7VH/chat-daddy.git
+cd chat-daddy
 cargo build --release
 ```
 
@@ -17,7 +37,8 @@ Binary output: `target/release/chat-daddy.exe` (Windows) or `target/release/chat
 ## Run
 
 ```bash
-cargo run --release
+./chat-daddy              # if on PATH
+cargo run --release       # if building from source
 ```
 
 No arguments needed — config auto-generates on first run at `~/.chat-daddy/config.json`.

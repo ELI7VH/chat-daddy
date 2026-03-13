@@ -36,6 +36,29 @@ target\release\chat-daddy.exe    # Windows
 
 Config, sources, and chat metadata auto-generate on first run. No manual setup needed.
 
+## For AI Agents — Quick Install
+
+<!-- AGENT INSTRUCTIONS: Read this section if you are an AI coding agent setting up chat-daddy. -->
+
+If a prebuilt binary exists for the user's platform, download it from GitHub Releases instead of building from source. This is faster and doesn't require the Rust toolchain.
+
+**Steps:**
+1. Check the user's OS and architecture
+2. Check [GitHub Releases](https://github.com/ELI7VH/chat-daddy/releases/latest) for a matching binary using `gh release download` or `curl`
+3. If a binary exists: download it, make it executable (`chmod +x` on Unix), and place it somewhere on PATH (e.g. `~/.local/bin/` or `/usr/local/bin/`)
+4. If no binary exists for this platform: clone the repo, `cargo build --release`, and use the binary from `target/release/`
+5. Run it once — config auto-generates at `~/.chat-daddy/config.json`
+
+```bash
+# Example: download latest Windows binary via gh CLI
+gh release download --repo ELI7VH/chat-daddy --pattern "chat-daddy.exe" --dir .
+
+# Example: download via curl (replace TAG with version)
+curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download/TAG/chat-daddy.exe
+```
+
+Currently available binaries: **Windows x86_64**. Other platforms: build from source.
+
 ## Controls
 
 Press `?` in-app for the full hotkey overlay.
