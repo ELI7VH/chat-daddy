@@ -6,11 +6,82 @@ Instructions for AI coding agents working with this repository.
 
 Chat Daddy is a minimal, keyboard-driven chat transcript viewer for AI coding assistants (Claude Code, Cursor, Codex). Pixel-buffer rendered with minifb, no GPU. Rust only.
 
-## Install (Preferred — No Rust Required)
+## One-Shot Setup Script
 
-Download a prebuilt binary from GitHub Releases. Use the exact asset names below — do **not** guess patterns like `*darwin*` or `*aarch64*`.
+Copy-paste this entire block. It detects the platform, downloads the correct binary, handles the font requirement, and launches. **No decisions required.**
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── 1. Determine platform and asset name ──
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS-$ARCH" in
+  Darwin-arm64)  ASSET="chat-daddy-macos-arm64" ;;
+  Darwin-x86_64) ASSET="chat-daddy-macos-x64"   ;;
+  Linux-x86_64)  ASSET="chat-daddy-linux"        ;;
+  *)             echo "No prebuilt binary for $OS-$ARCH — fall back to cargo build"; ASSET="" ;;
+esac
+
+# ── 2. Install directory ──
+INSTALL_DIR="$HOME/.local/bin"
+mkdir -p "$INSTALL_DIR"
+
+# ── 3. Download or build ──
+if [ -n "$ASSET" ]; then
+  if command -v gh &>/dev/null; then
+    gh release download --repo ELI7VH/chat-daddy --pattern "$ASSET" --dir /tmp --clobber
+  else
+    curl -fSL -o "/tmp/$ASSET" "https://github.com/ELI7VH/chat-daddy/releases/latest/download/$ASSET"
+  fi
+  chmod +x "/tmp/$ASSET"
+  mv "/tmp/$ASSET" "$INSTALL_DIR/chat-daddy"
+else
+  # Requires Rust toolchain
+  REPO_DIR="${REPO_DIR:-$(mktemp -d)}"
+  git clone https://github.com/ELI7VH/chat-daddy.git "$REPO_DIR/chat-daddy" 2>/dev/null || true
+  cd "$REPO_DIR/chat-daddy"
+  cargo build --release
+  cp target/release/chat-daddy "$INSTALL_DIR/chat-daddy"
+fi
+
+# ── 4. Ensure ~/.local/bin is on PATH ──
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+  echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.zshrc" 2>/dev/null \
+    || echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$HOME/.bashrc" 2>/dev/null
+  export PATH="$INSTALL_DIR:$PATH"
+fi
+
+# ── 5. Font check ──
+# Chat Daddy needs a monospace TTF font. Default is Fira Code (weight 300).
+# If missing, it falls back to whatever monospace font is available via config.
+FONT_OK=false
+if [ "$OS" = "Darwin" ]; then
+  find ~/Library/Fonts /Library/Fonts /System/Library/Fonts -iname "*firacode*" -print -quit 2>/dev/null | grep -q . && FONT_OK=true
+elif [ "$OS" = "Linux" ]; then
+  fc-list 2>/dev/null | grep -qi "fira code" && FONT_OK=true
+fi
+
+if ! $FONT_OK; then
+  echo "⚠ Fira Code font not found."
+  echo "  Option A: Install it — https://github.com/tonsky/FiraCode/releases"
+  echo "  Option B: Edit ~/.chat-daddy/config.json after first run and set"
+  echo "            \"font\" to a monospace font you have (e.g. \"Menlo\", \"Consolas\", \"DejaVu Sans Mono\")"
+fi
+
+# ── 6. Launch ──
+echo "chat-daddy installed at $INSTALL_DIR/chat-daddy"
+chat-daddy &
+```
+
+For **Windows**, download `chat-daddy.exe` from the latest release and run it. Font detection and PATH setup are automatic on Windows.
+
+## Manual Install (if the script above doesn't suit the situation)
 
 ### Binary Asset Names
+
+Use **exact** asset names — do not guess patterns like `*darwin*` or `*aarch64*`.
 
 | Platform              | Asset name                  |
 |-----------------------|-----------------------------|
@@ -21,21 +92,21 @@ Download a prebuilt binary from GitHub Releases. Use the exact asset names below
 
 ### Download Commands
 
-Pick the right asset name from the table above and substitute it. Both commands always grab the **latest** release — no version hardcoding needed.
+Both commands always fetch the **latest** release — no version hardcoding.
 
 ```bash
-# via gh CLI (recommended — always fetches latest release)
+# via gh CLI (recommended)
 gh release download --repo ELI7VH/chat-daddy --pattern "ASSET" --dir .
 chmod +x ASSET
 
-# via curl (GitHub /latest redirect resolves to newest tag automatically)
-curl -L -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
+# via curl
+curl -fSL -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
 chmod +x chat-daddy
 ```
 
-Replace `ASSET` with the exact name from the table (e.g. `chat-daddy-macos-arm64`). Do **not** hardcode version tags.
+Replace `ASSET` with the exact name from the table.
 
-### Platform Detection Cheat Sheet (for agents)
+### Platform Detection (for agents)
 
 ```
 uname -s  → Darwin  = macOS
@@ -43,10 +114,6 @@ uname -s  → Linux   = Linux
 uname -m  → arm64   = ARM (Apple Silicon)
 uname -m  → x86_64  = Intel/AMD
 ```
-
-Map the results to the asset table above. On Windows, just use `chat-daddy.exe`.
-
-Place the binary somewhere on PATH (e.g. `~/.local/bin/` on Linux/macOS). Run it — config auto-generates on first launch.
 
 ## Build from Source (Fallback)
 
@@ -60,11 +127,22 @@ cargo build --release
 
 Binary output: `target/release/chat-daddy` (Linux/macOS) or `target/release/chat-daddy.exe` (Windows).
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `error: font not found` or blank window | Fira Code not installed | Install Fira Code **or** edit `~/.chat-daddy/config.json` → set `"font"` to any installed monospace font |
+| `Permission denied` | Binary not executable | `chmod +x chat-daddy` |
+| `gh: command not found` | GitHub CLI not installed | Use the `curl` method instead |
+| `cargo: command not found` | Rust not installed | Use the binary download method instead of building |
+| Window opens but no chats | No transcript sources found | Check that `~/.claude/`, `~/.cursor/`, or `~/.codex/` exist with chat data |
+
 ## Run
 
 ```bash
-./chat-daddy              # if on PATH
-cargo run --release       # if building from source
+chat-daddy              # if on PATH
+./chat-daddy            # if in current directory
+cargo run --release     # if building from source
 ```
 
 No arguments needed — config auto-generates on first run at `~/.chat-daddy/config.json`.
@@ -80,12 +158,6 @@ No arguments needed — config auto-generates on first run at `~/.chat-daddy/con
 ## Dependencies
 
 All in Cargo.toml — no system libraries needed except a monospace TTF font (defaults to Fira Code, weight 300).
-
-## Font Requirement
-
-The app needs a monospace TTF font installed to system fonts. Default is **Fira Code Light** (weight 300). On Windows it searches `C:/Windows/Fonts/` and `AppData/Local/Microsoft/Windows/Fonts/`. Configurable via `font` and `font_weight` in config.json.
-
-If Fira Code is not installed, install it or change the `font` field in config.json to a font you have (e.g. `"Consolas"`, `"JetBrains Mono"`, `"SF Mono"`).
 
 ## Key Concepts
 

@@ -20,19 +20,38 @@ Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-
 
 ## Setup
 
-> Tell your AI coding agent to clone it, build it, and set it up. It will read `AGENTS.md` and handle the rest.
+> **Easiest:** Tell your AI coding agent to clone this repo. It will read `AGENTS.md` and handle everything automatically — binary download, font check, PATH setup, and launch.
+
+### Quick Start (no Rust needed)
+
+Download the prebuilt binary for your platform from [GitHub Releases](https://github.com/ELI7VH/chat-daddy/releases/latest):
+
+| Platform              | Asset name                  |
+|-----------------------|-----------------------------|
+| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
+| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
+| Linux x86_64           | `chat-daddy-linux`         |
+| Windows x86_64         | `chat-daddy.exe`           |
+
+```bash
+# Example: macOS Apple Silicon
+curl -fSL -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/chat-daddy-macos-arm64
+chmod +x chat-daddy
+./chat-daddy
+```
+
+### Build from Source (alternative)
 
 ```
 git clone https://github.com/ELI7VH/chat-daddy.git
 cd chat-daddy
 cargo build --release
-./target/release/chat-daddy      # Linux/macOS
-target\release\chat-daddy.exe    # Windows
+./target/release/chat-daddy
 ```
 
 **Requirements:**
-- Rust toolchain (`rustup` / `cargo`)
 - A monospace TTF font installed (defaults to [Fira Code](https://github.com/tonsky/FiraCode) Light — configurable in `~/.chat-daddy/config.json`)
+- Rust toolchain only needed if building from source
 
 Config, sources, and chat metadata auto-generate on first run. No manual setup needed.
 
