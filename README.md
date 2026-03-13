@@ -40,22 +40,33 @@ Config, sources, and chat metadata auto-generate on first run. No manual setup n
 
 <!-- AGENT INSTRUCTIONS: Read this section if you are an AI coding agent setting up chat-daddy. -->
 
-If a prebuilt binary exists for the user's platform, download it from GitHub Releases instead of building from source. This is faster and doesn't require the Rust toolchain.
+Download a prebuilt binary from GitHub Releases instead of building from source. Use the **exact asset names** below — do not guess with glob patterns.
+
+### Binary Asset Names
+
+| Platform              | Asset name                  |
+|-----------------------|-----------------------------|
+| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
+| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
+| Linux x86_64           | `chat-daddy-linux`         |
+| Windows x86_64         | `chat-daddy.exe`           |
 
 **Steps:**
-1. Check the user's OS and architecture
-2. Check [GitHub Releases](https://github.com/ELI7VH/chat-daddy/releases/latest) for a matching binary using `gh release download` or `curl`
-3. If a binary exists: download it, make it executable (`chmod +x` on Unix), and place it somewhere on PATH (e.g. `~/.local/bin/` or `/usr/local/bin/`)
-4. If no binary exists for this platform: clone the repo, `cargo build --release`, and use the binary from `target/release/`
+1. Detect OS and arch (`uname -s` / `uname -m` on Unix, or check environment on Windows)
+2. Download the matching binary using the exact asset name from the table — both methods always fetch the **latest** release:
+   ```bash
+   # via gh CLI (always fetches latest)
+   gh release download --repo ELI7VH/chat-daddy --pattern "ASSET" --dir .
+   chmod +x ASSET
+
+   # via curl (GitHub /latest redirect resolves automatically)
+   curl -L -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
+   chmod +x chat-daddy
+   ```
+   Replace `ASSET` with the exact name from the table. Do not hardcode version tags.
+3. Place it somewhere on PATH (e.g. `~/.local/bin/`)
+4. If no binary exists for the platform, fall back to `cargo build --release`
 5. Run it once — config auto-generates at `~/.chat-daddy/config.json`
-
-```bash
-# Example: download latest Windows binary via gh CLI
-gh release download --repo ELI7VH/chat-daddy --pattern "chat-daddy.exe" --dir .
-
-# Example: download via curl (replace TAG with version)
-curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download/TAG/chat-daddy.exe
-```
 
 Binaries are built automatically for **Windows x86_64**, **Linux x86_64**, **macOS ARM64**, and **macOS x64** on every tagged release.
 

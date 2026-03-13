@@ -8,19 +8,45 @@ Chat Daddy is a minimal, keyboard-driven chat transcript viewer for AI coding as
 
 ## Install (Preferred — No Rust Required)
 
-Check GitHub Releases first. If a prebuilt binary exists for the user's platform, use it instead of building from source.
+Download a prebuilt binary from GitHub Releases. Use the exact asset names below — do **not** guess patterns like `*darwin*` or `*aarch64*`.
+
+### Binary Asset Names
+
+| Platform              | Asset name                  |
+|-----------------------|-----------------------------|
+| macOS ARM64 (M1/M2+)  | `chat-daddy-macos-arm64`    |
+| macOS x64 (Intel)      | `chat-daddy-macos-x64`     |
+| Linux x86_64           | `chat-daddy-linux`         |
+| Windows x86_64         | `chat-daddy.exe`           |
+
+### Download Commands
+
+Pick the right asset name from the table above and substitute it. Both commands always grab the **latest** release — no version hardcoding needed.
 
 ```bash
-# Download latest release binary (example: Windows)
-gh release download --repo ELI7VH/chat-daddy --pattern "chat-daddy.exe" --dir .
+# via gh CLI (recommended — always fetches latest release)
+gh release download --repo ELI7VH/chat-daddy --pattern "ASSET" --dir .
+chmod +x ASSET
 
-# Or via curl (replace v0.1.0 with latest tag)
-curl -L -o chat-daddy.exe https://github.com/ELI7VH/chat-daddy/releases/download/v0.1.0/chat-daddy.exe
+# via curl (GitHub /latest redirect resolves to newest tag automatically)
+curl -L -o chat-daddy https://github.com/ELI7VH/chat-daddy/releases/latest/download/ASSET
+chmod +x chat-daddy
 ```
 
-Place the binary somewhere on PATH (e.g. `~/.local/bin/` on Linux, or any folder on Windows). Run it — config auto-generates on first launch.
+Replace `ASSET` with the exact name from the table (e.g. `chat-daddy-macos-arm64`). Do **not** hardcode version tags.
 
-Available binaries: **Windows x86_64**, **Linux x86_64**, **macOS ARM64**, **macOS x64**. Built automatically on every tagged release.
+### Platform Detection Cheat Sheet (for agents)
+
+```
+uname -s  → Darwin  = macOS
+uname -s  → Linux   = Linux
+uname -m  → arm64   = ARM (Apple Silicon)
+uname -m  → x86_64  = Intel/AMD
+```
+
+Map the results to the asset table above. On Windows, just use `chat-daddy.exe`.
+
+Place the binary somewhere on PATH (e.g. `~/.local/bin/` on Linux/macOS). Run it — config auto-generates on first launch.
 
 ## Build from Source (Fallback)
 
@@ -32,7 +58,7 @@ cd chat-daddy
 cargo build --release
 ```
 
-Binary output: `target/release/chat-daddy.exe` (Windows) or `target/release/chat-daddy` (Linux/macOS).
+Binary output: `target/release/chat-daddy` (Linux/macOS) or `target/release/chat-daddy.exe` (Windows).
 
 ## Run
 
