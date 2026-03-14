@@ -730,6 +730,7 @@ struct TranscriptEntry {
     last_preview: String,
     timestamp: String,
     remote: Option<RemoteOrigin>,
+    remote_name: Option<String>, // chat name from peer's chats.json
 }
 
 // --- LAN peer sync ---
@@ -915,6 +916,7 @@ fn make_entry(path: PathBuf, source_name: &str, format: SourceFormat) -> Option<
         last_preview,
         timestamp,
         remote: None,
+        remote_name: None,
     })
 }
 
@@ -2007,15 +2009,21 @@ fn handle_tcp_client(stream: TcpStream, sources: &[SourceConfig]) {
     let line = line.trim().to_string();
     if line == "LIST" {
         let transcripts = get_all_transcripts(sources);
+        let chats = load_chats();
         let arr: Vec<Value> = transcripts.iter().map(|t| {
-            serde_json::json!({
+            let name = chats.get(&t.uuid).and_then(|m| m.name.as_ref()).cloned();
+            let mut obj = serde_json::json!({
                 "uuid": t.uuid,
                 "project": t.project,
                 "mtime": t.mtime_secs,
                 "preview": t.preview,
                 "last_preview": t.last_preview,
                 "timestamp": t.timestamp,
-            })
+            });
+            if let Some(n) = name {
+                obj["name"] = serde_json::Value::String(n);
+            }
+            obj
         }).collect();
         let json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into());
         let _ = writer.write_all(json.as_bytes());
@@ -2177,6 +2185,7 @@ fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
         let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("").to_string();
         let last_preview = v.get("last_preview").and_then(|p| p.as_str()).unwrap_or("").to_string();
         let timestamp = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let remote_name = v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
         Some(TranscriptEntry {
             path: PathBuf::new(),
             uuid,
@@ -2190,6 +2199,7 @@ fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
                 hostname: hostname.to_string(),
                 tcp_addr: addr,
             }),
+            remote_name,
         })
     }).collect()
 }
@@ -3216,7 +3226,8 @@ fn main() {
                     } else {
                         "  "
                     };
-                    let display_name = chats.get(&t.uuid).and_then(|m| m.name.as_ref());
+                    let display_name = chats.get(&t.uuid).and_then(|m| m.name.as_ref())
+                        .or(t.remote_name.as_ref());
                     let left_text = match display_name {
                         Some(name) => format!("{}{}", star, name),
                         None => {
