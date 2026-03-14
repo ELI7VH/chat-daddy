@@ -14,9 +14,12 @@ Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-
 
 - **Multi-source** — Claude Code, Cursor, Codex transcripts unified in a single list
 - **LLM auto-naming** — local Qwen2.5-0.5B names unnamed chats automatically
-- **Configurable theme** — full color palette, font family, and weight via `~/.chat-daddy/config.json`
+- **10 built-in themes** — Tokyo Night, Nord, Dracula, Catppuccin, Gruvbox, and more. Press `T` to cycle live
+- **Custom themes** — drop JSON files in `~/.chat-daddy/themes/` to add your own
 - **Keyboard-driven** — search, star, rename, navigate between chats without touching the mouse
-- **LAN peer sync** — instances on different machines discover each other and show remote chats inline
+- **LAN peer sync** — instances on different machines discover each other via UDP broadcast, show remote chats inline with names
+- **Splash screen** — pulsing icon while loading, no blank window on startup
+- **Window memory** — remembers position and size across sessions
 
 ## Setup
 
@@ -88,6 +91,7 @@ Press `?` in-app for the full hotkey overlay.
 | Shift+F | Toggle favorites filter |
 | / | Search |
 | N | Rename chat |
+| T | Cycle theme |
 | ? | Help overlay |
 | Escape | Quit |
 
@@ -126,6 +130,22 @@ Stored at `~/.chat-daddy/config.json`. Auto-generated on first run with detected
 ```
 
 See the full color key list in [config defaults](src/main.rs).
+
+## LAN Peer Sync
+
+Instances on the same network automatically discover each other via UDP broadcast on port 21847. Remote chats appear inline in your list with the peer's hostname, including their chat names.
+
+**Firewall:** On Windows, you may need to allow chat-daddy through the firewall:
+
+```powershell
+# Run as Administrator
+netsh advfirewall firewall add rule name="chat-daddy UDP" dir=in action=allow protocol=UDP localport=21847
+netsh advfirewall firewall add rule name="chat-daddy TCP" dir=in action=allow protocol=TCP program="<path-to-chat-daddy.exe>"
+```
+
+On macOS, click "Allow" when prompted for incoming connections on first launch.
+
+Press `?` to see your hostname, listening port, and connected peers.
 
 ## LLM Auto-Naming
 

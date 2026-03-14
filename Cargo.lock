@@ -225,13 +225,14 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chat-daddy"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "arboard",
  "chrono",
  "fontdue",
  "image",
  "minifb",
+ "raw-window-handle",
  "serde_json",
  "ureq",
  "winresource",
