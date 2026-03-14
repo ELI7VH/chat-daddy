@@ -28,6 +28,68 @@ const PAD: i32 = 12;
 const FONT_SIZES: [f32; 4] = [11.0, 14.0, 18.0, 24.0];
 const DEFAULT_SIZE_IDX: usize = 1; // 14px
 
+/// Query the actual NSView size on macOS, bypassing minifb's broken get_size().
+/// minifb only updates width/height in viewDidEndLiveResize, which doesn't fire
+/// for system-managed resizes (tile, maximize, Stage Manager).
+#[cfg(target_os = "macos")]
+fn native_view_size(window: &Window) -> Option<(usize, usize)> {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_ref() else { return None };
+    let ns_view = appkit.ns_view.as_ptr();
+
+    // Call [ns_view bounds] via objc_msgSend.
+    // bounds returns NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } }
+    // On ARM64 macOS, structs <= 16 bytes are returned in registers; NSRect is 32 bytes
+    // so we use objc_msgSend_stret on x86_64 and regular objc_msgSend on ARM64.
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct NSRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
+    extern "C" {
+        fn sel_registerName(name: *const u8) -> *const std::ffi::c_void;
+    }
+
+    unsafe {
+        let sel = sel_registerName(b"bounds\0".as_ptr());
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            // ARM64: large structs returned in registers via regular objc_msgSend
+            extern "C" {
+                fn objc_msgSend(obj: *mut std::ffi::c_void, sel: *const std::ffi::c_void) -> NSRect;
+            }
+            let rect = objc_msgSend(ns_view as *mut _, sel);
+            Some((rect.width.max(1.0) as usize, rect.height.max(1.0) as usize))
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            // x86_64: structs > 16 bytes use objc_msgSend_stret
+            extern "C" {
+                fn objc_msgSend_stret(
+                    out: *mut NSRect,
+                    obj: *mut std::ffi::c_void,
+                    sel: *const std::ffi::c_void,
+                );
+            }
+            let mut rect: NSRect = std::mem::zeroed();
+            objc_msgSend_stret(&mut rect, ns_view as *mut _, sel);
+            Some((rect.width.max(1.0) as usize, rect.height.max(1.0) as usize))
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_view_size(_window: &Window) -> Option<(usize, usize)> {
+    None // other platforms: minifb's get_size() works correctly
+}
+
 // --- default colors (used as fallbacks, overridable via config) ---
 // These constants are used by helper functions (parse_inline_markdown, etc.)
 // and get shadowed by theme values inside main()'s render loop.
@@ -2253,7 +2315,9 @@ fn main() {
         rename_buf: String::new(),
     };
 
-    let mut buffer = vec![rgb(theme.bg.0, theme.bg.1, theme.bg.2); WIN_W * WIN_H];
+    let mut buffer = vec![rgb(theme.bg.0, theme.bg.1, theme.bg.2); init_w * init_h];
+    let mut buf_w: usize = init_w;
+    let mut buf_h: usize = init_h;
     let mut transition: Option<AppState> = None;
     let mut size_idx = DEFAULT_SIZE_IDX;
     let mut atlas = FontAtlas::with_font(FONT_SIZES[size_idx], &font_name, font_weight);
@@ -2343,12 +2407,14 @@ fn main() {
             state = s;
         }
 
-        let (win_w, win_h) = window.get_size();
-        if buffer.len() != win_w * win_h {
-            buffer = vec![rgb(c_bg.0, c_bg.1, c_bg.2); win_w * win_h];
+        // Prefer native NSView size (handles tile/maximize on macOS); fall back to minifb
+        let (win_w, win_h) = native_view_size(&window)
+            .unwrap_or_else(|| window.get_size());
+        if win_w != buf_w || win_h != buf_h {
+            buf_w = win_w.max(1);
+            buf_h = win_h.max(1);
+            buffer = vec![rgb(c_bg.0, c_bg.1, c_bg.2); buf_w * buf_h];
         }
-        let buf_w = win_w;
-        let buf_h = win_h;
         let lh = atlas.line_height;
         let advance = atlas.advance;
         let content_top = HEADER_H + PAD;
@@ -3594,7 +3660,10 @@ fn main() {
         }
         last_window_size = (win_w, win_h);
 
-        window.update_with_buffer(&buffer, win_w, win_h).unwrap();
+        // Use buf_w/buf_h (captured at frame start) so dimensions always match the buffer.
+        // During a live resize, get_size() may have changed since we allocated — this prevents
+        // a mismatch panic or stretched pixels.
+        let _ = window.update_with_buffer(&buffer, buf_w, buf_h);
     }
 
     // Save last known window position and size on exit
