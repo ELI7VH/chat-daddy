@@ -3531,12 +3531,14 @@ fn main() {
             total_h += hotkeys.len() as i32 * lh; // hotkeys
             total_h += lh; // "T  cycle theme" line
             total_h += gap + sep_h + gap; // separator 2
-            // Connected peers section
+            // Connected peers section (always show)
+            total_h += lh; // network label (hostname:port)
             if !peer_names.is_empty() {
-                total_h += lh; // "connected" label
                 total_h += peer_names.len() as i32 * lh; // peer names
-                total_h += gap + sep_h + gap; // separator 3
+            } else {
+                total_h += lh; // "no peers"
             }
+            total_h += gap + sep_h + gap; // separator 3
             total_h += lh; // theme label
             total_h += lh; // footer
 
@@ -3601,20 +3603,23 @@ fn main() {
             cy += gap;
             fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
             cy += sep_h + gap;
-            // Connected peers section
+            // Connected peers section (always show)
+            let net_label = format!("  {} :{}", my_hostname, my_tcp_port);
+            draw_text_ttf(&mut buffer, px, cy, &net_label, c_dim, &mut atlas, buf_w, buf_h);
+            cy += lh;
             if !peer_names.is_empty() {
-                let label = format!("  connected ({})", peer_names.len());
-                draw_text_ttf(&mut buffer, px, cy, &label, c_accent, &mut atlas, buf_w, buf_h);
-                cy += lh;
                 for name in &peer_names {
                     let peer_line = format!("    {}", name);
-                    draw_text_ttf(&mut buffer, px, cy, &peer_line, c_dim, &mut atlas, buf_w, buf_h);
+                    draw_text_ttf(&mut buffer, px, cy, &peer_line, c_accent, &mut atlas, buf_w, buf_h);
                     cy += lh;
                 }
-                cy += gap;
-                fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
-                cy += sep_h + gap;
+            } else {
+                draw_text_ttf(&mut buffer, px, cy, "    no peers", c_dim, &mut atlas, buf_w, buf_h);
+                cy += lh;
             }
+            cy += gap;
+            fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
+            cy += sep_h + gap;
             // Current theme name (centered)
             let theme_label = if let Some((_, ref name, _)) = available_themes.get(theme_selected) {
                 format!("theme: {}", name)
