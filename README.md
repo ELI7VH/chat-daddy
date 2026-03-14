@@ -6,7 +6,7 @@
   <img src="assets/icon.png" alt="Chat Daddy" width="120" />
 </p>
 
-# Chat Daddy
+# <img src="assets/icon.png" alt="" width="32" height="32" style="vertical-align: middle;" /> Chat Daddy
 
 Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-buffer rendered with zero GPU dependencies. Reads transcripts from Claude Code, Cursor, and Codex — all in one place.
 
