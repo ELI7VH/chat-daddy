@@ -2917,6 +2917,9 @@ fn main() {
                                 // ? key
                                 show_help = !show_help;
                             }
+                            Key::H if !show_help => {
+                                show_help = true;
+                            }
                             Key::N if !show_help => {
                                 *renaming = true;
                                 rename_buf.clear();
@@ -3122,6 +3125,9 @@ fn main() {
                     }
                     Key::Slash if shift => {
                         // ? key
+                        show_help = !show_help;
+                    }
+                    Key::H => {
                         show_help = !show_help;
                     }
                     Key::T => {
@@ -3521,7 +3527,7 @@ fn main() {
                     "  Ctrl+E       export selected",
                     "  Ctrl+/\u{2212}      font size",
                     "  Esc          clear / quit",
-                    "  ?            toggle help",
+                    "  ? / H        toggle help",
                 ],
                 AppState::View { .. } => &[
                     "  Up/Down      scroll",
@@ -3532,7 +3538,7 @@ fn main() {
                     "  Ctrl+A       select all",
                     "  Ctrl+/\u{2212}      font size",
                     "  Esc          back to list",
-                    "  ?            toggle help",
+                    "  ? / H        toggle help",
                 ],
             };
             let icon_size: i32 = if help_icon.is_some() { 96 } else { 0 };
