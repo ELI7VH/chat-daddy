@@ -1,6 +1,8 @@
 //! chat-daddy — unified chat transcript viewer for Claude, Cursor, Codex, and custom sources.
 //! Config: ~/.chat-daddy/config.json (auto-generated on first run)
 
+#![windows_subsystem = "windows"]
+
 mod font;
 
 use arboard::Clipboard;
@@ -411,39 +413,47 @@ fn sources_to_json(sources: &[SourceConfig]) -> Vec<Value> {
 }
 
 fn load_available_themes() -> Vec<(String, String, Theme)> {
-    // Returns (file_stem, display_name, theme) tuples
     let mut themes = Vec::new();
+    let mut seen = HashSet::new();
 
-    // Built-in themes from the themes/ folder (embedded at compile time won't work for user themes)
-    // Check themes/ relative to exe, then relative to cwd, then ~/.chat-daddy/themes/
-    let mut dirs_to_check: Vec<PathBuf> = vec![];
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            dirs_to_check.push(parent.join("themes"));
+    // Built-in themes embedded at compile time
+    let builtin: &[(&str, &str)] = &[
+        ("catppuccin", include_str!("../themes/catppuccin.json")),
+        ("dracula", include_str!("../themes/dracula.json")),
+        ("gruvbox", include_str!("../themes/gruvbox.json")),
+        ("light", include_str!("../themes/light.json")),
+        ("midnight", include_str!("../themes/midnight.json")),
+        ("monokai", include_str!("../themes/monokai.json")),
+        ("nord", include_str!("../themes/nord.json")),
+        ("rose-pine", include_str!("../themes/rose-pine.json")),
+        ("solarized-dark", include_str!("../themes/solarized-dark.json")),
+        ("tokyo-night", include_str!("../themes/tokyo-night.json")),
+    ];
+    for (stem, data) in builtin {
+        if let Ok(val) = serde_json::from_str::<Value>(data) {
+            let name = val.get("name").and_then(|n| n.as_str()).unwrap_or(stem).to_string();
+            let theme = load_theme_from_value(&val);
+            seen.insert(stem.to_string());
+            themes.push((stem.to_string(), name, theme));
         }
     }
-    dirs_to_check.push(PathBuf::from("themes"));
-    dirs_to_check.push(chat_daddy_dir().join("themes"));
 
-    let mut seen = HashSet::new();
-    for dir in &dirs_to_check {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
-                if seen.contains(&stem) {
-                    continue;
-                }
-                if let Ok(data) = fs::read_to_string(&path) {
-                    if let Ok(val) = serde_json::from_str::<Value>(&data) {
-                        let name = val.get("name").and_then(|n| n.as_str()).unwrap_or(&stem).to_string();
-                        let theme = load_theme_from_value(&val);
-                        seen.insert(stem.clone());
-                        themes.push((stem, name, theme));
-                    }
+    // User themes from ~/.chat-daddy/themes/ (override built-in by name)
+    let user_dir = chat_daddy_dir().join("themes");
+    if let Ok(entries) = fs::read_dir(&user_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            if seen.contains(&stem) { continue; }
+            if let Ok(data) = fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<Value>(&data) {
+                    let name = val.get("name").and_then(|n| n.as_str()).unwrap_or(&stem).to_string();
+                    let theme = load_theme_from_value(&val);
+                    seen.insert(stem.clone());
+                    themes.push((stem, name, theme));
                 }
             }
         }
@@ -956,13 +966,13 @@ fn preview_last_line(path: &Path, format: &SourceFormat) -> Option<String> {
         }
         let text = strip_query_wrapper(&preview_from_value(&j, format));
         if !text.is_empty() {
-            let short: String = text.chars().take(120).collect();
-            let short = if text.chars().count() > 120 {
+            let short: String = text.chars().take(300).collect();
+            let short = if text.chars().count() > 300 {
                 format!("{}..", short)
             } else {
                 short
             };
-            last_text = Some(short.replace('\n', " ").trim().to_string());
+            last_text = Some(short.trim().to_string());
             break;
         }
     }
@@ -2258,9 +2268,9 @@ fn main() {
     let mut saved_list_idx: usize = 0;
     let mut saved_list_scroll: i32 = 0;
     let mut quit_requested = false;
-    let mut show_theme_picker = false;
     let mut available_themes = load_available_themes();
     let mut theme_selected: usize = 0;
+    let mut theme_flash: Option<Instant> = None;
 
     // --- LAN peer sync setup ---
     let my_hostname = get_hostname();
@@ -2780,9 +2790,7 @@ fn main() {
                     } else {
                         match key {
                             Key::Escape => {
-                                if show_theme_picker {
-                                    show_theme_picker = false;
-                                } else if show_help {
+                                if show_help {
                                     show_help = false;
                                 } else if !multi_selected.is_empty() {
                                     multi_selected.clear();
@@ -2790,34 +2798,21 @@ fn main() {
                                     quit_requested = true;
                                 }
                             }
-                            Key::T if show_help && !show_theme_picker => {
-                                available_themes = load_available_themes();
-                                show_theme_picker = true;
-                                theme_selected = 0;
-                            }
-                            Key::Up if show_theme_picker => {
-                                if theme_selected > 0 {
-                                    theme_selected -= 1;
+                            Key::T => {
+                                if available_themes.is_empty() {
+                                    available_themes = load_available_themes();
                                 }
-                            }
-                            Key::Down if show_theme_picker => {
-                                if theme_selected + 1 < available_themes.len() {
-                                    theme_selected += 1;
-                                }
-                            }
-                            Key::Enter if show_theme_picker => {
-                                if let Some((_stem, _name, ref new_theme)) = available_themes.get(theme_selected) {
-                                    cfg.theme = new_theme.clone();
+                                if !available_themes.is_empty() {
+                                    theme_selected = (theme_selected + 1) % available_themes.len();
+                                    cfg.theme = available_themes[theme_selected].2.clone();
                                     save_config(&cfg);
                                     needs_theme_reload = true;
-                                    show_theme_picker = false;
-                                    show_help = false;
+                                    theme_flash = Some(Instant::now());
                                 }
                             }
                             Key::Slash if shift => {
                                 // ? key
                                 show_help = !show_help;
-                                show_theme_picker = false;
                             }
                             Key::N if !show_help => {
                                 *renaming = true;
@@ -2958,9 +2953,7 @@ fn main() {
                     path: _, source_format: _, lines, scroll, sel, chat_uuid, ..
                 } => match key {
                     Key::Escape => {
-                        if show_theme_picker {
-                            show_theme_picker = false;
-                        } else if show_help {
+                        if show_help {
                             show_help = false;
                         } else if sel.active {
                             sel.active = false;
@@ -3027,26 +3020,17 @@ fn main() {
                     Key::Slash if shift => {
                         // ? key
                         show_help = !show_help;
-                        show_theme_picker = false;
                     }
-                    Key::T if show_help && !show_theme_picker => {
-                        available_themes = load_available_themes();
-                        show_theme_picker = true;
-                        theme_selected = 0;
-                    }
-                    Key::Up if show_theme_picker => {
-                        if theme_selected > 0 { theme_selected -= 1; }
-                    }
-                    Key::Down if show_theme_picker => {
-                        if theme_selected + 1 < available_themes.len() { theme_selected += 1; }
-                    }
-                    Key::Enter if show_theme_picker => {
-                        if let Some((_stem, _name, ref new_theme)) = available_themes.get(theme_selected) {
-                            cfg.theme = new_theme.clone();
+                    Key::T => {
+                        if available_themes.is_empty() {
+                            available_themes = load_available_themes();
+                        }
+                        if !available_themes.is_empty() {
+                            theme_selected = (theme_selected + 1) % available_themes.len();
+                            cfg.theme = available_themes[theme_selected].2.clone();
                             save_config(&cfg);
                             needs_theme_reload = true;
-                            show_theme_picker = false;
-                            show_help = false;
+                            theme_flash = Some(Instant::now());
                         }
                     }
                     Key::Up if show_help => {}
@@ -3167,18 +3151,28 @@ fn main() {
                         c_timestamp, &mut atlas, buf_w, buf_h,
                     );
 
-                    // Preview lines
+                    // Preview lines (respects newlines in text)
                     let preview_text = if !t.last_preview.is_empty() { &t.last_preview } else { &t.preview };
                     if !preview_text.is_empty() {
-                        let preview_line_count = if is_selected { 1 + extra_preview_lines as usize } else { 1 };
-                        let chars: Vec<char> = preview_text.chars().collect();
+                        let max_lines = if is_selected { 1 + extra_preview_lines as usize } else { 1 };
                         let line_max = max_chars.saturating_sub(5);
-                        for pl in 0..preview_line_count {
-                            let start = pl * line_max;
-                            if start >= chars.len() { break; }
-                            let end = (start + line_max).min(chars.len());
-                            let segment: String = chars[start..end].iter().collect();
-                            let line_text = if end < chars.len() && pl == preview_line_count - 1 {
+                        // Split on newlines first, then wrap each line
+                        let mut preview_lines: Vec<String> = Vec::new();
+                        for paragraph in preview_text.split('\n') {
+                            let trimmed = paragraph.trim();
+                            if trimmed.is_empty() { continue; }
+                            let chars: Vec<char> = trimmed.chars().collect();
+                            let mut pos = 0;
+                            while pos < chars.len() && preview_lines.len() < max_lines {
+                                let end = (pos + line_max).min(chars.len());
+                                let segment: String = chars[pos..end].iter().collect();
+                                preview_lines.push(segment);
+                                pos = end;
+                            }
+                            if preview_lines.len() >= max_lines { break; }
+                        }
+                        for (pl, segment) in preview_lines.iter().enumerate().take(max_lines) {
+                            let line_text = if pl == max_lines - 1 && preview_text.chars().count() > line_max * max_lines {
                                 format!("     {}..", segment)
                             } else {
                                 format!("     {}", segment)
@@ -3466,7 +3460,7 @@ fn main() {
             total_h += lh / 2; // mode label
             total_h += gap + sep_h + gap; // separator 1
             total_h += hotkeys.len() as i32 * lh; // hotkeys
-            total_h += lh; // "T  select theme" line
+            total_h += lh; // "T  cycle theme" line
             total_h += gap + sep_h + gap; // separator 2
             // Connected peers section
             if !peer_names.is_empty() {
@@ -3474,6 +3468,7 @@ fn main() {
                 total_h += peer_names.len() as i32 * lh; // peer names
                 total_h += gap + sep_h + gap; // separator 3
             }
+            total_h += lh; // theme label
             total_h += lh; // footer
 
             let px = (win_w as i32 - panel_w) / 2;
@@ -3531,7 +3526,7 @@ fn main() {
                 cy += lh;
             }
             // Theme selector hint
-            draw_text_ttf(&mut buffer, px, cy, "  T            select theme", c_toggle, &mut atlas, buf_w, buf_h);
+            draw_text_ttf(&mut buffer, px, cy, "  T            cycle theme", c_toggle, &mut atlas, buf_w, buf_h);
             cy += lh;
             // Separator 2
             cy += gap;
@@ -3551,47 +3546,36 @@ fn main() {
                 fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
                 cy += sep_h + gap;
             }
+            // Current theme name (centered)
+            let theme_label = if let Some((_, ref name, _)) = available_themes.get(theme_selected) {
+                format!("theme: {}", name)
+            } else {
+                "theme: default".to_string()
+            };
+            let theme_w = theme_label.len() as i32 * advance;
+            let theme_x = px + (panel_w - theme_w) / 2;
+            draw_text_ttf(&mut buffer, theme_x, cy, &theme_label, c_toggle, &mut atlas, buf_w, buf_h);
+            cy += lh;
             // Footer "lucianlabs.ca" (centered, dim)
             let footer_w = footer.len() as i32 * advance;
             let footer_x = px + (panel_w - footer_w) / 2;
             draw_text_ttf(&mut buffer, footer_x, cy, footer, c_dim, &mut atlas, buf_w, buf_h);
 
-            // === Theme picker overlay (drawn on top if active) ===
-            if show_theme_picker && !available_themes.is_empty() {
-                let tp_w = 28 * advance;
-                let tp_title = "select theme";
-                let tp_h = lh + (available_themes.len() as i32) * lh + gap;
-                let tp_x = (win_w as i32 - tp_w) / 2;
-                let tp_y = (win_h as i32 - tp_h) / 2;
-                let tp_pad = PAD;
-                let tp_full_w = tp_w + 2 * tp_pad;
-                let tp_full_h = tp_h + 2 * tp_pad;
-                // shadow
-                for layer in 0..3i32 {
-                    fill_rect(&mut buffer, tp_x - tp_pad + shadow_dx - layer, tp_y - tp_pad + shadow_dy + layer, tp_full_w + 2 * layer, tp_full_h + 2 * layer, (0, 0, 0), buf_w, buf_h);
-                }
-                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, tp_full_w, tp_full_h, c_header_bg, buf_w, buf_h);
-                // border
-                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, tp_full_w, 1, c_sep, buf_w, buf_h);
-                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad + tp_full_h - 1, tp_full_w, 1, c_sep, buf_w, buf_h);
-                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, 1, tp_full_h, c_sep, buf_w, buf_h);
-                fill_rect(&mut buffer, tp_x - tp_pad + tp_full_w - 1, tp_y - tp_pad, 1, tp_full_h, c_sep, buf_w, buf_h);
+        }
 
-                let mut tcy = tp_y;
-                let tt_w = tp_title.len() as i32 * advance;
-                let tt_x = tp_x + (tp_w - tt_w) / 2;
-                draw_text_ttf(&mut buffer, tt_x, tcy, tp_title, c_accent, &mut atlas, buf_w, buf_h);
-                tcy += lh;
-                for (i, (_stem, name, _theme)) in available_themes.iter().enumerate() {
-                    let is_cur = i == theme_selected;
-                    if is_cur {
-                        fill_rect(&mut buffer, tp_x, tcy, tp_w, lh, c_sel, buf_w, buf_h);
-                    }
-                    let prefix = if is_cur { "> " } else { "  " };
-                    let label = format!("{}{}", prefix, name);
-                    draw_text_ttf(&mut buffer, tp_x, tcy, &label, if is_cur { c_text } else { c_dim }, &mut atlas, buf_w, buf_h);
-                    tcy += lh;
+        // Theme name flash at bottom of window (shown for 2 seconds after T press)
+        if let Some(flash_time) = theme_flash {
+            if flash_time.elapsed().as_secs_f32() < 2.0 {
+                if let Some((_, ref name, _)) = available_themes.get(theme_selected) {
+                    let label = format!("theme: {}", name);
+                    let label_w = label.len() as i32 * advance;
+                    let tx = (win_w as i32 - label_w) / 2;
+                    let ty = win_h as i32 - lh - PAD;
+                    fill_rect(&mut buffer, tx - PAD, ty - 2, label_w + PAD * 2, lh + 4, c_header_bg, buf_w, buf_h);
+                    draw_text_ttf(&mut buffer, tx, ty, &label, c_accent, &mut atlas, buf_w, buf_h);
                 }
+            } else {
+                theme_flash = None;
             }
         }
 
