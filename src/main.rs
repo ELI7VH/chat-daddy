@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read as IoRead, Write as IoWrite};
+use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::net::{TcpListener, TcpStream, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -1909,6 +1909,15 @@ fn rebuild_view(
 fn get_hostname() -> String {
     env::var("COMPUTERNAME")
         .or_else(|_| env::var("HOSTNAME"))
+        .or_else(|_| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .ok_or(env::VarError::NotPresent)
+        })
         .unwrap_or_else(|_| "unknown".into())
 }
 
@@ -1987,11 +1996,31 @@ fn start_beacon_sender(hostname: String, tcp_port: u16) {
     });
 }
 
+fn refresh_remote_entries(peer_state: &Arc<Mutex<PeerState>>) {
+    let addrs: Vec<(SocketAddr, String)> = {
+        let Ok(ps) = peer_state.lock() else { return };
+        ps.peers.iter().map(|(addr, info)| (*addr, info.hostname.clone())).collect()
+    };
+    let mut all_remote = Vec::new();
+    for (addr, hostname) in &addrs {
+        let entries = fetch_peer_list(*addr, hostname);
+        all_remote.extend(entries);
+    }
+    if let Ok(mut ps) = peer_state.lock() {
+        ps.remote_entries = all_remote;
+        ps.dirty = true;
+    }
+}
+
 fn start_beacon_listener(peer_state: Arc<Mutex<PeerState>>, my_hostname: String) {
     thread::spawn(move || {
-        let Ok(sock) = UdpSocket::bind(format!("0.0.0.0:{}", LAN_PORT)) else { return };
-        let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+        let Ok(sock) = UdpSocket::bind(format!("0.0.0.0:{}", LAN_PORT)) else {
+            eprintln!("[chat-daddy] failed to bind UDP port {}", LAN_PORT);
+            return;
+        };
+        let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         let mut buf = [0u8; 1024];
+        let mut last_refresh = Instant::now();
         loop {
             match sock.recv_from(&mut buf) {
                 Ok((n, src_addr)) => {
@@ -2005,80 +2034,52 @@ fn start_beacon_listener(peer_state: Arc<Mutex<PeerState>>, my_hostname: String)
                     }
                     let tcp_port = p as u16;
                     let peer_tcp_addr: SocketAddr = SocketAddr::new(src_addr.ip(), tcp_port);
-                    let mut changed = false;
+                    let is_new;
                     if let Ok(mut ps) = peer_state.lock() {
-                        let is_new = !ps.peers.contains_key(&peer_tcp_addr);
+                        is_new = !ps.peers.contains_key(&peer_tcp_addr);
                         ps.peers.insert(peer_tcp_addr, PeerInfo {
                             hostname: h.to_string(),
                             tcp_port,
                             last_seen: Instant::now(),
                         });
-                        // evict stale peers
-                        let before = ps.peers.len();
                         ps.peers.retain(|_, info| info.last_seen.elapsed().as_secs() < 9);
-                        let after = ps.peers.len();
-                        if is_new || before != after {
-                            changed = true;
-                        }
+                    } else {
+                        is_new = false;
                     }
-                    if changed {
-                        // fetch LIST from all live peers
-                        let addrs: Vec<(SocketAddr, String)> = {
-                            let Ok(ps) = peer_state.lock() else { continue };
-                            ps.peers.iter().map(|(addr, info)| (*addr, info.hostname.clone())).collect()
-                        };
-                        let mut all_remote = Vec::new();
-                        for (addr, hostname) in &addrs {
-                            let entries = fetch_peer_list(*addr, hostname);
-                            all_remote.extend(entries);
-                        }
-                        if let Ok(mut ps) = peer_state.lock() {
-                            ps.remote_entries = all_remote;
-                            ps.dirty = true;
-                        }
+                    // immediate fetch on new peer, periodic refresh otherwise
+                    if is_new || last_refresh.elapsed().as_secs() >= 10 {
+                        refresh_remote_entries(&peer_state);
+                        last_refresh = Instant::now();
                     }
                 }
                 Err(_) => {
                     // timeout — evict stale peers
-                    let mut changed = false;
                     if let Ok(mut ps) = peer_state.lock() {
-                        let before = ps.peers.len();
                         ps.peers.retain(|_, info| info.last_seen.elapsed().as_secs() < 9);
-                        if ps.peers.len() != before {
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        let addrs: Vec<(SocketAddr, String)> = {
-                            let Ok(ps) = peer_state.lock() else { continue };
-                            ps.peers.iter().map(|(addr, info)| (*addr, info.hostname.clone())).collect()
-                        };
-                        let mut all_remote = Vec::new();
-                        for (addr, hostname) in &addrs {
-                            let entries = fetch_peer_list(*addr, hostname);
-                            all_remote.extend(entries);
-                        }
-                        if let Ok(mut ps) = peer_state.lock() {
-                            ps.remote_entries = all_remote;
-                            ps.dirty = true;
-                        }
                     }
                 }
+            }
+            // always refresh periodically regardless of beacon activity
+            if last_refresh.elapsed().as_secs() >= 10 {
+                refresh_remote_entries(&peer_state);
+                last_refresh = Instant::now();
             }
         }
     });
 }
 
 fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
+    let Ok(stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
         return vec![];
     };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-    if stream.write_all(b"LIST\n").is_err() {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut writer = match stream.try_clone() { Ok(w) => w, Err(_) => return vec![] };
+    if writer.write_all(b"LIST\n").is_err() {
         return vec![];
     }
+    let mut reader = BufReader::new(stream);
     let mut response = String::new();
-    let _ = stream.read_to_string(&mut response);
+    let _ = reader.read_line(&mut response);
     let response = response.trim();
     let Ok(arr) = serde_json::from_str::<Vec<Value>>(response) else {
         return vec![];
@@ -2108,16 +2109,18 @@ fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
 }
 
 fn fetch_remote_messages(addr: SocketAddr, uuid: &str) -> Vec<MessageLine> {
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
+    let Ok(stream) = TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) else {
         return vec![];
     };
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut writer = match stream.try_clone() { Ok(w) => w, Err(_) => return vec![] };
     let cmd = format!("GET {}\n", uuid);
-    if stream.write_all(cmd.as_bytes()).is_err() {
+    if writer.write_all(cmd.as_bytes()).is_err() {
         return vec![];
     }
+    let mut reader = BufReader::new(stream);
     let mut response = String::new();
-    let _ = stream.read_to_string(&mut response);
+    let _ = reader.read_line(&mut response);
     let response = response.trim();
     let Ok(arr) = serde_json::from_str::<Vec<Value>>(response) else {
         return vec![];
