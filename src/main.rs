@@ -410,6 +410,48 @@ fn sources_to_json(sources: &[SourceConfig]) -> Vec<Value> {
         .collect()
 }
 
+fn load_available_themes() -> Vec<(String, String, Theme)> {
+    // Returns (file_stem, display_name, theme) tuples
+    let mut themes = Vec::new();
+
+    // Built-in themes from the themes/ folder (embedded at compile time won't work for user themes)
+    // Check themes/ relative to exe, then relative to cwd, then ~/.chat-daddy/themes/
+    let mut dirs_to_check: Vec<PathBuf> = vec![];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs_to_check.push(parent.join("themes"));
+        }
+    }
+    dirs_to_check.push(PathBuf::from("themes"));
+    dirs_to_check.push(chat_daddy_dir().join("themes"));
+
+    let mut seen = HashSet::new();
+    for dir in &dirs_to_check {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                if seen.contains(&stem) {
+                    continue;
+                }
+                if let Ok(data) = fs::read_to_string(&path) {
+                    if let Ok(val) = serde_json::from_str::<Value>(&data) {
+                        let name = val.get("name").and_then(|n| n.as_str()).unwrap_or(&stem).to_string();
+                        let theme = load_theme_from_value(&val);
+                        seen.insert(stem.clone());
+                        themes.push((stem, name, theme));
+                    }
+                }
+            }
+        }
+    }
+    themes.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    themes
+}
+
 fn save_config(cfg: &AppConfig) {
     let config = serde_json::json!({
         "font": cfg.font,
@@ -613,6 +655,7 @@ struct TranscriptEntry {
     source_format: SourceFormat,
     mtime_secs: u64,
     preview: String,
+    last_preview: String,
     timestamp: String,
     remote: Option<RemoteOrigin>,
 }
@@ -788,6 +831,7 @@ fn make_entry(path: PathBuf, source_name: &str, format: SourceFormat) -> Option<
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let preview = preview_first_line(&path, &format).unwrap_or_default();
+    let last_preview = preview_last_line(&path, &format).unwrap_or_default();
     let timestamp = format_timestamp(mtime_secs);
     Some(TranscriptEntry {
         path,
@@ -796,6 +840,7 @@ fn make_entry(path: PathBuf, source_name: &str, format: SourceFormat) -> Option<
         source_format: format,
         mtime_secs,
         preview,
+        last_preview,
         timestamp,
         remote: None,
     })
@@ -893,6 +938,35 @@ fn preview_first_line(path: &Path, format: &SourceFormat) -> Option<String> {
         }
     }
     None
+}
+
+fn preview_last_line(path: &Path, format: &SourceFormat) -> Option<String> {
+    // Read from end — collect last valid content line
+    let data = fs::read_to_string(path).ok()?;
+    let mut last_text: Option<String> = None;
+    for line in data.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let j: Value = serde_json::from_str(line).ok()?;
+        let entry_type = j.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if entry_type == "queue-operation" || entry_type == "session_meta" {
+            continue;
+        }
+        let text = strip_query_wrapper(&preview_from_value(&j, format));
+        if !text.is_empty() {
+            let short: String = text.chars().take(120).collect();
+            let short = if text.chars().count() > 120 {
+                format!("{}..", short)
+            } else {
+                short
+            };
+            last_text = Some(short.replace('\n', " ").trim().to_string());
+            break;
+        }
+    }
+    last_text
 }
 
 // --- message parsing ---
@@ -1184,6 +1258,21 @@ fn chars_per_line(win_w: usize, advance: i32) -> usize {
 }
 
 const LIST_LINES_PER_ITEM: i32 = 4;
+const LIST_EXTRA_SELECTED: i32 = 2; // extra preview lines for highlighted item
+
+/// Compute the y-offset (in lines) of item `idx` in the list, accounting for
+/// the selected item being taller.
+fn list_item_y_lines(idx: usize, selected: usize, count: usize) -> i32 {
+    let mut y = 0i32;
+    for i in 0..idx.min(count) {
+        y += if i == selected { LIST_LINES_PER_ITEM + LIST_EXTRA_SELECTED } else { LIST_LINES_PER_ITEM };
+    }
+    y
+}
+
+fn list_total_lines(count: usize, selected: usize) -> i32 {
+    (count as i32) * LIST_LINES_PER_ITEM + if selected < count { LIST_EXTRA_SELECTED } else { 0 }
+}
 
 fn wrap_str(s: &str, width: usize) -> Vec<String> {
     let mut out = Vec::new();
@@ -1528,25 +1617,9 @@ fn fill_rect(
 /// Load icon PNG and return as (width, height, Vec<u32>) pixel buffer.
 /// Applies circular mask. Returns None on failure.
 fn load_icon_pixels(size: u32) -> Option<(u32, u32, Vec<u32>)> {
-    // Try relative to exe, then current dir
-    let paths_to_try = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("assets/icon.png"))),
-        Some(PathBuf::from("assets/icon.png")),
-    ];
-    let mut img = None;
-    for p in &paths_to_try {
-        if let Some(ref path) = p {
-            if path.exists() {
-                if let Ok(i) = image::open(path) {
-                    img = Some(i);
-                    break;
-                }
-            }
-        }
-    }
-    let img = img?;
+    // Icon is embedded in the binary at compile time
+    let icon_bytes = include_bytes!("../assets/icon.png");
+    let img = image::load_from_memory(icon_bytes).ok()?;
     // Resize to target size, crop to square first
     let (w, h) = img.dimensions();
     let s = w.min(h);
@@ -1859,6 +1932,7 @@ fn handle_tcp_client(stream: TcpStream, sources: &[SourceConfig]) {
                 "project": t.project,
                 "mtime": t.mtime_secs,
                 "preview": t.preview,
+                "last_preview": t.last_preview,
                 "timestamp": t.timestamp,
             })
         }).collect();
@@ -2004,6 +2078,7 @@ fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
         let project = v.get("project")?.as_str()?.to_string();
         let mtime = v.get("mtime")?.as_u64().unwrap_or(0);
         let preview = v.get("preview").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        let last_preview = v.get("last_preview").and_then(|p| p.as_str()).unwrap_or("").to_string();
         let timestamp = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
         Some(TranscriptEntry {
             path: PathBuf::new(),
@@ -2012,6 +2087,7 @@ fn fetch_peer_list(addr: SocketAddr, hostname: &str) -> Vec<TranscriptEntry> {
             source_format: SourceFormat::Generic,
             mtime_secs: mtime,
             preview,
+            last_preview,
             timestamp,
             remote: Some(RemoteOrigin {
                 hostname: hostname.to_string(),
@@ -2045,17 +2121,35 @@ fn fetch_remote_messages(addr: SocketAddr, uuid: &str) -> Vec<MessageLine> {
 }
 
 fn main() {
-    let cfg = load_config();
-    let sources = cfg.sources;
-    let theme = cfg.theme;
-    let font_name = cfg.font;
+    let mut cfg = load_config();
+    let sources = cfg.sources.clone();
+    let mut theme = cfg.theme.clone();
+    let font_name = cfg.font.clone();
     let font_weight = cfg.font_weight;
     let snapshot = env::var("CHAT_DADDY_SNAP").is_ok();
 
+    // Restore saved window state
+    let window_state_path = chat_daddy_dir().join("window.json");
+    let (init_w, init_h, saved_pos) = if let Ok(data) = fs::read_to_string(&window_state_path) {
+        if let Ok(j) = serde_json::from_str::<Value>(&data) {
+            let w = j.get("w").and_then(|v| v.as_u64()).unwrap_or(WIN_W as u64) as usize;
+            let h = j.get("h").and_then(|v| v.as_u64()).unwrap_or(WIN_H as u64) as usize;
+            let pos = match (j.get("x").and_then(|v| v.as_i64()), j.get("y").and_then(|v| v.as_i64())) {
+                (Some(x), Some(y)) => Some((x as isize, y as isize)),
+                _ => None,
+            };
+            (w.max(400), h.max(300), pos)
+        } else {
+            (WIN_W, WIN_H, None)
+        }
+    } else {
+        (WIN_W, WIN_H, None)
+    };
+
     let mut window = Window::new(
         "chat-daddy",
-        WIN_W,
-        WIN_H,
+        init_w,
+        init_h,
         WindowOptions {
             resize: true,
             ..WindowOptions::default()
@@ -2064,8 +2158,40 @@ fn main() {
     .expect("window");
     window.set_target_fps(60);
 
-    // Load icon pixels for help overlay (48px circle-cropped)
-    let help_icon: Option<(u32, u32, Vec<u32>)> = load_icon_pixels(48);
+    if let Some((x, y)) = saved_pos {
+        window.set_position(x, y);
+    }
+
+    // Show splash screen while loading (native aspect ratio, centered on black)
+    {
+        let splash_bytes = include_bytes!("../assets/splash.jpg");
+        if let Ok(splash_img) = image::load_from_memory(splash_bytes) {
+            let (iw, ih) = splash_img.dimensions();
+            // Fit image within window preserving aspect ratio
+            let scale = (WIN_W as f64 / iw as f64).min(WIN_H as f64 / ih as f64);
+            let dw = (iw as f64 * scale) as u32;
+            let dh = (ih as f64 * scale) as u32;
+            let resized = splash_img.resize_exact(dw, dh, image::imageops::FilterType::Triangle);
+            let rgb_img = resized.to_rgb8();
+            let mut splash_buf = vec![rgb(0, 0, 0); WIN_W * WIN_H];
+            let ox = (WIN_W as u32 - dw) / 2;
+            let oy = (WIN_H as u32 - dh) / 2;
+            for py in 0..dh {
+                for px in 0..dw {
+                    let pixel = rgb_img.get_pixel(px, py);
+                    let bx = (ox + px) as usize;
+                    let by = (oy + py) as usize;
+                    if bx < WIN_W && by < WIN_H {
+                        splash_buf[by * WIN_W + bx] = rgb(pixel[0], pixel[1], pixel[2]);
+                    }
+                }
+            }
+            let _ = window.update_with_buffer(&splash_buf, WIN_W, WIN_H);
+        }
+    }
+
+    // Load icon pixels for help overlay (96px circle-cropped)
+    let help_icon: Option<(u32, u32, Vec<u32>)> = load_icon_pixels(96);
 
     let all_transcripts = get_all_transcripts(&sources);
     let mut chats = load_chats();
@@ -2091,10 +2217,18 @@ fn main() {
     let mut needs_rebuild = false;
     let mut show_help = false;
     let mut multi_selected: HashSet<String> = HashSet::new(); // UUIDs of multi-selected chats
-    let llm_endpoint = cfg.llm_endpoint;
+    let llm_endpoint = cfg.llm_endpoint.clone();
     let mut llm_healthy = false;
     let mut llm_last_check = Instant::now() - std::time::Duration::from_secs(60); // force first check
     let mut auto_name_last = Instant::now() - std::time::Duration::from_secs(60);
+    let mut last_window_pos: (isize, isize) = (0, 0);
+    let mut last_window_size: (usize, usize) = (WIN_W, WIN_H);
+    let mut saved_list_idx: usize = 0;
+    let mut saved_list_scroll: i32 = 0;
+    let mut quit_requested = false;
+    let mut show_theme_picker = false;
+    let mut available_themes = load_available_themes();
+    let mut theme_selected: usize = 0;
 
     // --- LAN peer sync setup ---
     let my_hostname = get_hostname();
@@ -2117,26 +2251,49 @@ fn main() {
     let mut last_merged: Vec<TranscriptEntry> = Vec::new();
 
     // theme-derived color aliases (lowercase, used by render code)
-    let c_bg = theme.bg;
-    let c_dim = theme.dim;
-    let c_user = theme.user;
-    let c_asst = theme.asst;
-    let c_text = theme.text;
-    let c_sel = theme.sel;
-    let c_sep = theme.sep;
-    let c_header_bg = theme.header_bg;
-    let c_accent = theme.accent;
-    let c_search_bg = theme.search_bg;
-    let c_timestamp = theme.timestamp;
-    let c_select_bg = theme.select_bg;
-    let c_code = theme.code;
-    let c_code_bg = theme.code_bg;
-    let _c_bold = theme.bold;
-    let c_toggle = theme.toggle;
-    let c_heading = theme.heading;
-    let c_msg_time = theme.msg_time;
+    let mut c_bg = theme.bg;
+    let mut c_dim = theme.dim;
+    let mut c_user = theme.user;
+    let mut c_asst = theme.asst;
+    let mut c_text = theme.text;
+    let mut c_sel = theme.sel;
+    let mut c_sep = theme.sep;
+    let mut c_header_bg = theme.header_bg;
+    let mut c_accent = theme.accent;
+    let mut c_search_bg = theme.search_bg;
+    let mut c_timestamp = theme.timestamp;
+    let mut c_select_bg = theme.select_bg;
+    let mut c_code = theme.code;
+    let mut c_code_bg = theme.code_bg;
+    let mut _c_bold = theme.bold;
+    let mut c_toggle = theme.toggle;
+    let mut c_heading = theme.heading;
+    let mut c_msg_time = theme.msg_time;
+    let mut needs_theme_reload = false;
 
-    while window.is_open() {
+    while window.is_open() && !quit_requested {
+        if needs_theme_reload {
+            theme = cfg.theme.clone();
+            c_bg = theme.bg;
+            c_dim = theme.dim;
+            c_user = theme.user;
+            c_asst = theme.asst;
+            c_text = theme.text;
+            c_sel = theme.sel;
+            c_sep = theme.sep;
+            c_header_bg = theme.header_bg;
+            c_accent = theme.accent;
+            c_search_bg = theme.search_bg;
+            c_timestamp = theme.timestamp;
+            c_select_bg = theme.select_bg;
+            c_code = theme.code;
+            c_code_bg = theme.code_bg;
+            _c_bold = theme.bold;
+            c_toggle = theme.toggle;
+            c_heading = theme.heading;
+            c_msg_time = theme.msg_time;
+            needs_theme_reload = false;
+        }
         if let Some(s) = transition.take() {
             state = s;
         }
@@ -2197,8 +2354,9 @@ fn main() {
                         );
                         *selected = (*selected).min(filtered.len().saturating_sub(1));
                         let visible_lines = ((win_h as i32) - content_top - PAD) / lh;
-                        let total_lines = (filtered.len() as i32) * LIST_LINES_PER_ITEM;
-                        *scroll = ((*selected as i32) * LIST_LINES_PER_ITEM - visible_lines / 2)
+                        let total_lines = list_total_lines(filtered.len(), *selected);
+                        let sel_y = list_item_y_lines(*selected, *selected, filtered.len());
+                        *scroll = (sel_y - visible_lines / 2)
                             .max(0)
                             .min((total_lines - visible_lines).max(0));
                     }
@@ -2387,8 +2545,9 @@ fn main() {
                             .max(0) as usize;
                     }
                     let visible_lines = ((win_h as i32) - content_top - PAD) / lh;
-                    let total_lines = (filtered.len() as i32) * LIST_LINES_PER_ITEM;
-                    *scroll = ((*selected as i32) * LIST_LINES_PER_ITEM - visible_lines / 2)
+                    let total_lines = list_total_lines(filtered.len(), *selected);
+                    let sel_y = list_item_y_lines(*selected, *selected, filtered.len());
+                    *scroll = (sel_y - visible_lines / 2)
                         .max(0)
                         .min((total_lines - visible_lines).max(0));
                 }
@@ -2589,19 +2748,46 @@ fn main() {
                     } else {
                         match key {
                             Key::Escape => {
-                                if show_help {
+                                if show_theme_picker {
+                                    show_theme_picker = false;
+                                } else if show_help {
                                     show_help = false;
                                 } else if !multi_selected.is_empty() {
                                     multi_selected.clear();
                                 } else {
-                                    return;
+                                    quit_requested = true;
+                                }
+                            }
+                            Key::T if show_help && !show_theme_picker => {
+                                available_themes = load_available_themes();
+                                show_theme_picker = true;
+                                theme_selected = 0;
+                            }
+                            Key::Up if show_theme_picker => {
+                                if theme_selected > 0 {
+                                    theme_selected -= 1;
+                                }
+                            }
+                            Key::Down if show_theme_picker => {
+                                if theme_selected + 1 < available_themes.len() {
+                                    theme_selected += 1;
+                                }
+                            }
+                            Key::Enter if show_theme_picker => {
+                                if let Some((_stem, _name, ref new_theme)) = available_themes.get(theme_selected) {
+                                    cfg.theme = new_theme.clone();
+                                    save_config(&cfg);
+                                    needs_theme_reload = true;
+                                    show_theme_picker = false;
+                                    show_help = false;
                                 }
                             }
                             Key::Slash if shift => {
                                 // ? key
                                 show_help = !show_help;
+                                show_theme_picker = false;
                             }
-                            Key::N => {
+                            Key::N if !show_help => {
                                 *renaming = true;
                                 rename_buf.clear();
                                 // pre-fill with existing name if any
@@ -2690,6 +2876,8 @@ fn main() {
                                     (*selected + 1).min(filtered.len().saturating_sub(1));
                             }
                             Key::Enter => {
+                                saved_list_idx = *selected;
+                                saved_list_scroll = *scroll;
                                 if let Some(entry) = filtered.get(*selected).cloned() {
                                     let fmt = entry.source_format.clone();
                                     let msgs = match &entry.remote {
@@ -2728,8 +2916,9 @@ fn main() {
                         }
                     }
                     let visible_lines = ((win_h as i32) - content_top - PAD) / lh;
-                    let total_lines = (filtered.len() as i32) * LIST_LINES_PER_ITEM;
-                    *scroll = ((*selected as i32) * LIST_LINES_PER_ITEM - visible_lines / 2)
+                    let total_lines = list_total_lines(filtered.len(), *selected);
+                    let sel_y = list_item_y_lines(*selected, *selected, filtered.len());
+                    *scroll = (sel_y - visible_lines / 2)
                         .max(0)
                         .min((total_lines - visible_lines).max(0));
                 }
@@ -2737,17 +2926,20 @@ fn main() {
                     path: _, source_format: _, lines, scroll, sel, chat_uuid, ..
                 } => match key {
                     Key::Escape => {
-                        if show_help {
+                        if show_theme_picker {
+                            show_theme_picker = false;
+                        } else if show_help {
                             show_help = false;
                         } else if sel.active {
                             sel.active = false;
                         } else {
                             let all = get_all_transcripts(&sources);
+                            let idx = saved_list_idx.min(all.len().saturating_sub(1));
                             transition = Some(AppState::List {
                                 filtered: all.clone(),
                                 transcripts: all,
-                                selected: 0,
-                                scroll: 0,
+                                selected: idx,
+                                scroll: saved_list_scroll,
                                 searching: false,
                                 search_term: String::new(),
                                 favs_only: false,
@@ -2803,7 +2995,30 @@ fn main() {
                     Key::Slash if shift => {
                         // ? key
                         show_help = !show_help;
+                        show_theme_picker = false;
                     }
+                    Key::T if show_help && !show_theme_picker => {
+                        available_themes = load_available_themes();
+                        show_theme_picker = true;
+                        theme_selected = 0;
+                    }
+                    Key::Up if show_theme_picker => {
+                        if theme_selected > 0 { theme_selected -= 1; }
+                    }
+                    Key::Down if show_theme_picker => {
+                        if theme_selected + 1 < available_themes.len() { theme_selected += 1; }
+                    }
+                    Key::Enter if show_theme_picker => {
+                        if let Some((_stem, _name, ref new_theme)) = available_themes.get(theme_selected) {
+                            cfg.theme = new_theme.clone();
+                            save_config(&cfg);
+                            needs_theme_reload = true;
+                            show_theme_picker = false;
+                            show_help = false;
+                        }
+                    }
+                    Key::Up if show_help => {}
+                    Key::Down if show_help => {}
                     Key::Up => *scroll = (*scroll - 1).max(0),
                     Key::Down => {
                         let visible = ((win_h as i32) - content_top - PAD) / lh;
@@ -2857,146 +3072,98 @@ fn main() {
                 scroll,
                 ..
             } => {
-                let total_lines = (list.len() as i32) * LIST_LINES_PER_ITEM;
+                let max_chars = chars_per_line(win_w, advance);
+                let extra_preview_lines: i32 = 2; // extra lines for selected item
                 let mut y = content_top - *scroll * lh;
-                for line_idx in 0..total_lines {
-                    if y + lh < content_top || y > win_h as i32 {
-                        y += lh;
-                        continue;
-                    }
-                    let i = (line_idx / LIST_LINES_PER_ITEM) as usize;
-                    let sub = line_idx % LIST_LINES_PER_ITEM;
-                    let t = match list.get(i) {
-                        Some(x) => x,
-                        None => continue,
-                    };
+                for i in 0..list.len() {
+                    let t = &list[i];
                     let is_selected = i == *selected;
                     let is_multi = multi_selected.contains(&t.uuid);
-                    if is_selected && sub == 0 {
-                        fill_rect(
-                            &mut buffer,
-                            0,
-                            y,
-                            win_w as i32,
-                            lh * 3,
-                            c_sel,
-                            buf_w,
-                            buf_h,
-                        );
-                    } else if is_multi && sub == 0 {
-                        // subtle highlight for multi-selected items
-                        fill_rect(
-                            &mut buffer,
-                            0,
-                            y,
-                            win_w as i32,
-                            lh * 3,
-                            c_select_bg,
-                            buf_w,
-                            buf_h,
-                        );
-                    }
-                    match sub {
-                        0 => {
-                            // Left side: star + display name (or preview fallback)
-                            let star = if is_multi {
-                                "> "
-                            } else if chats.get(&t.uuid).map_or(false, |m| m.starred) {
-                                "* "
-                            } else {
-                                "  "
-                            };
-                            let display_name = chats.get(&t.uuid).and_then(|m| m.name.as_ref());
-                            let left_text = match display_name {
-                                Some(name) => format!("{}{}", star, name),
-                                None => {
-                                    // truncate preview for left side
-                                    let max_left = chars_per_line(win_w, advance) / 2;
-                                    let prev: String = t.preview.chars().take(max_left).collect();
-                                    format!("{}{}", star, prev)
-                                }
-                            };
-                            draw_text_ttf(
-                                &mut buffer,
-                                PAD,
-                                y,
-                                &left_text,
-                                if is_selected { c_text } else { c_dim },
-                                &mut atlas,
-                                buf_w,
-                                buf_h,
-                            );
+                    let item_lines = if is_selected { LIST_LINES_PER_ITEM + extra_preview_lines } else { LIST_LINES_PER_ITEM };
+                    let item_h = item_lines * lh;
 
-                            // Right side: [hostname · platform]  [hash]  [timestamp]
-                            let project_display = match &t.remote {
-                                Some(origin) => format!("{} · {}", origin.hostname, t.project),
-                                None => t.project.clone(),
-                            };
-                            let uuid_short = if t.uuid.len() >= 8 {
-                                &t.uuid[..8]
+                    // skip if entirely off-screen
+                    if y + item_h < content_top {
+                        y += item_h;
+                        continue;
+                    }
+                    if y > win_h as i32 {
+                        break;
+                    }
+
+                    // Background highlight
+                    let content_h = item_h - lh; // exclude separator line
+                    if is_selected {
+                        fill_rect(&mut buffer, 0, y, win_w as i32, content_h, c_sel, buf_w, buf_h);
+                    } else if is_multi {
+                        fill_rect(&mut buffer, 0, y, win_w as i32, content_h, c_select_bg, buf_w, buf_h);
+                    }
+
+                    // Line 0: name + metadata
+                    let star = if is_multi {
+                        "> "
+                    } else if chats.get(&t.uuid).map_or(false, |m| m.starred) {
+                        "* "
+                    } else {
+                        "  "
+                    };
+                    let display_name = chats.get(&t.uuid).and_then(|m| m.name.as_ref());
+                    let left_text = match display_name {
+                        Some(name) => format!("{}{}", star, name),
+                        None => {
+                            let max_left = max_chars / 2;
+                            let prev: String = t.preview.chars().take(max_left).collect();
+                            format!("{}{}", star, prev)
+                        }
+                    };
+                    draw_text_ttf(
+                        &mut buffer, PAD, y, &left_text,
+                        if is_selected { c_accent } else { c_dim },
+                        &mut atlas, buf_w, buf_h,
+                    );
+
+                    // Right side: platform / hash / timestamp
+                    let project_display = match &t.remote {
+                        Some(origin) => format!("{} · {}", origin.hostname, t.project),
+                        None => t.project.clone(),
+                    };
+                    let uuid_short = if t.uuid.len() >= 8 { &t.uuid[..8] } else { &t.uuid };
+                    let right = format!("{}  {}  {}", project_display, uuid_short, t.timestamp);
+                    let right_w = right.len() as i32 * advance;
+                    draw_text_ttf(
+                        &mut buffer, win_w as i32 - PAD - right_w, y, &right,
+                        c_timestamp, &mut atlas, buf_w, buf_h,
+                    );
+
+                    // Preview lines
+                    let preview_text = if !t.last_preview.is_empty() { &t.last_preview } else { &t.preview };
+                    if !preview_text.is_empty() {
+                        let preview_line_count = if is_selected { 1 + extra_preview_lines as usize } else { 1 };
+                        let chars: Vec<char> = preview_text.chars().collect();
+                        let line_max = max_chars.saturating_sub(5);
+                        for pl in 0..preview_line_count {
+                            let start = pl * line_max;
+                            if start >= chars.len() { break; }
+                            let end = (start + line_max).min(chars.len());
+                            let segment: String = chars[start..end].iter().collect();
+                            let line_text = if end < chars.len() && pl == preview_line_count - 1 {
+                                format!("     {}..", segment)
                             } else {
-                                &t.uuid
+                                format!("     {}", segment)
                             };
-                            let right = format!(
-                                "{}  {}  {}",
-                                project_display, uuid_short, t.timestamp
-                            );
-                            let right_w = right.len() as i32 * advance;
                             draw_text_ttf(
-                                &mut buffer,
-                                win_w as i32 - PAD - right_w,
-                                y,
-                                &right,
-                                c_timestamp,
-                                &mut atlas,
-                                buf_w,
-                                buf_h,
-                            );
-                        }
-                        1 => {
-                            // If entry has a name, show preview underneath; otherwise skip (preview is already on line 0)
-                            if chats.get(&t.uuid).and_then(|m| m.name.as_ref()).is_some() {
-                                let max_prev = chars_per_line(win_w, advance).saturating_sub(5);
-                                let prev = if t.preview.chars().count() > max_prev {
-                                    format!(
-                                        "     {}..",
-                                        t.preview.chars().take(max_prev).collect::<String>()
-                                    )
-                                } else {
-                                    format!("     {}", t.preview)
-                                };
-                                draw_text_ttf(
-                                    &mut buffer,
-                                    PAD,
-                                    y,
-                                    &prev,
-                                    if is_selected {
-                                        c_dim
-                                    } else {
-                                        c_msg_time
-                                    },
-                                    &mut atlas,
-                                    buf_w,
-                                    buf_h,
-                                );
-                            }
-                        }
-                        2 => {} // spacer
-                        _ => {
-                            let sep_y = y + lh / 2;
-                            fill_rect(
-                                &mut buffer,
-                                PAD,
-                                sep_y,
-                                (win_w as i32) - 2 * PAD,
-                                1,
-                                c_sep,
-                                buf_w,
-                                buf_h,
+                                &mut buffer, PAD, y + (1 + pl as i32) * lh, &line_text,
+                                if is_selected { c_text } else { c_msg_time },
+                                &mut atlas, buf_w, buf_h,
                             );
                         }
                     }
-                    y += lh;
+
+                    // Separator at bottom of item
+                    let sep_y = y + content_h + lh / 2;
+                    fill_rect(&mut buffer, PAD, sep_y, (win_w as i32) - 2 * PAD, 1, c_sep, buf_w, buf_h);
+
+                    y += item_h;
                 }
             }
             AppState::View {
@@ -3239,7 +3406,7 @@ fn main() {
                     "  ?            toggle help",
                 ],
             };
-            let icon_size: i32 = if help_icon.is_some() { 48 } else { 0 };
+            let icon_size: i32 = if help_icon.is_some() { 96 } else { 0 };
             let icon_gap: i32 = if help_icon.is_some() { 8 } else { 0 };
             let title = "chat-daddy";
             let mode_label = match &state {
@@ -3247,30 +3414,63 @@ fn main() {
                 AppState::View { .. } => "VIEW",
             };
             let footer = "lucianlabs.ca";
+
+            // Gather connected peers
+            let peer_names: Vec<String> = if let Ok(ps) = peer_state.try_lock() {
+                let mut names: Vec<String> = ps.peers.values().map(|p| p.hostname.clone()).collect();
+                names.sort();
+                names
+            } else {
+                vec![]
+            };
+
             // Calculate panel dimensions
             let panel_w = 38 * advance;
-            // Layout: icon + gap + title + gap + mode label + sep + hotkeys + sep + footer
             let sep_h = 1;
-            let gap = lh / 2; // half-line gap around separators
+            let gap = lh / 2;
             let mut total_h: i32 = 0;
             total_h += icon_size + icon_gap; // icon
-            total_h += lh; // title "chat-daddy"
-            total_h += lh / 2; // mode label line (smaller gap)
+            total_h += lh; // title
+            total_h += lh / 2; // mode label
             total_h += gap + sep_h + gap; // separator 1
             total_h += hotkeys.len() as i32 * lh; // hotkeys
+            total_h += lh; // "T  select theme" line
             total_h += gap + sep_h + gap; // separator 2
+            // Connected peers section
+            if !peer_names.is_empty() {
+                total_h += lh; // "connected" label
+                total_h += peer_names.len() as i32 * lh; // peer names
+                total_h += gap + sep_h + gap; // separator 3
+            }
             total_h += lh; // footer
 
             let px = (win_w as i32 - panel_w) / 2;
             let py = (win_h as i32 - total_h) / 2;
             let pad2 = PAD * 2;
+            let panel_full_w = panel_w + 4 * PAD;
+            let panel_full_h = total_h + 4 * PAD;
+            // Drop shadow (offset -6px left, +8px down — light source top-right)
+            let shadow_dx: i32 = -6;
+            let shadow_dy: i32 = 8;
+            for layer in 0..4i32 {
+                fill_rect(
+                    &mut buffer,
+                    px - pad2 + shadow_dx - layer,
+                    py - pad2 + shadow_dy + layer,
+                    panel_full_w + 2 * layer,
+                    panel_full_h + 2 * layer,
+                    (0, 0, 0),
+                    buf_w,
+                    buf_h,
+                );
+            }
             // dark background
-            fill_rect(&mut buffer, px - pad2, py - pad2, panel_w + 4 * PAD, total_h + 4 * PAD, c_header_bg, buf_w, buf_h);
-            // border
-            fill_rect(&mut buffer, px - pad2, py - pad2, panel_w + 4 * PAD, 1, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px - pad2, py + total_h + pad2, panel_w + 4 * PAD, 1, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px - pad2, py - pad2, 1, total_h + 4 * PAD, c_sep, buf_w, buf_h);
-            fill_rect(&mut buffer, px + panel_w + pad2, py - pad2, 1, total_h + 4 * PAD + 1, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py - pad2, panel_full_w, panel_full_h, c_header_bg, buf_w, buf_h);
+            // border (1px all around)
+            fill_rect(&mut buffer, px - pad2, py - pad2, panel_full_w, 1, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py - pad2 + panel_full_h - 1, panel_full_w, 1, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2, py - pad2, 1, panel_full_h, c_sep, buf_w, buf_h);
+            fill_rect(&mut buffer, px - pad2 + panel_full_w - 1, py - pad2, 1, panel_full_h, c_sep, buf_w, buf_h);
 
             let mut cy = py;
             // Icon (centered)
@@ -3298,14 +3498,69 @@ fn main() {
                 draw_text_ttf(&mut buffer, px, cy, line, c_text, &mut atlas, buf_w, buf_h);
                 cy += lh;
             }
+            // Theme selector hint
+            draw_text_ttf(&mut buffer, px, cy, "  T            select theme", c_toggle, &mut atlas, buf_w, buf_h);
+            cy += lh;
             // Separator 2
             cy += gap;
             fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
             cy += sep_h + gap;
+            // Connected peers section
+            if !peer_names.is_empty() {
+                let label = format!("  connected ({})", peer_names.len());
+                draw_text_ttf(&mut buffer, px, cy, &label, c_accent, &mut atlas, buf_w, buf_h);
+                cy += lh;
+                for name in &peer_names {
+                    let peer_line = format!("    {}", name);
+                    draw_text_ttf(&mut buffer, px, cy, &peer_line, c_dim, &mut atlas, buf_w, buf_h);
+                    cy += lh;
+                }
+                cy += gap;
+                fill_rect(&mut buffer, px, cy, panel_w, sep_h, c_sep, buf_w, buf_h);
+                cy += sep_h + gap;
+            }
             // Footer "lucianlabs.ca" (centered, dim)
             let footer_w = footer.len() as i32 * advance;
             let footer_x = px + (panel_w - footer_w) / 2;
             draw_text_ttf(&mut buffer, footer_x, cy, footer, c_dim, &mut atlas, buf_w, buf_h);
+
+            // === Theme picker overlay (drawn on top if active) ===
+            if show_theme_picker && !available_themes.is_empty() {
+                let tp_w = 28 * advance;
+                let tp_title = "select theme";
+                let tp_h = lh + (available_themes.len() as i32) * lh + gap;
+                let tp_x = (win_w as i32 - tp_w) / 2;
+                let tp_y = (win_h as i32 - tp_h) / 2;
+                let tp_pad = PAD;
+                let tp_full_w = tp_w + 2 * tp_pad;
+                let tp_full_h = tp_h + 2 * tp_pad;
+                // shadow
+                for layer in 0..3i32 {
+                    fill_rect(&mut buffer, tp_x - tp_pad + shadow_dx - layer, tp_y - tp_pad + shadow_dy + layer, tp_full_w + 2 * layer, tp_full_h + 2 * layer, (0, 0, 0), buf_w, buf_h);
+                }
+                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, tp_full_w, tp_full_h, c_header_bg, buf_w, buf_h);
+                // border
+                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, tp_full_w, 1, c_sep, buf_w, buf_h);
+                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad + tp_full_h - 1, tp_full_w, 1, c_sep, buf_w, buf_h);
+                fill_rect(&mut buffer, tp_x - tp_pad, tp_y - tp_pad, 1, tp_full_h, c_sep, buf_w, buf_h);
+                fill_rect(&mut buffer, tp_x - tp_pad + tp_full_w - 1, tp_y - tp_pad, 1, tp_full_h, c_sep, buf_w, buf_h);
+
+                let mut tcy = tp_y;
+                let tt_w = tp_title.len() as i32 * advance;
+                let tt_x = tp_x + (tp_w - tt_w) / 2;
+                draw_text_ttf(&mut buffer, tt_x, tcy, tp_title, c_accent, &mut atlas, buf_w, buf_h);
+                tcy += lh;
+                for (i, (_stem, name, _theme)) in available_themes.iter().enumerate() {
+                    let is_cur = i == theme_selected;
+                    if is_cur {
+                        fill_rect(&mut buffer, tp_x, tcy, tp_w, lh, c_sel, buf_w, buf_h);
+                    }
+                    let prefix = if is_cur { "> " } else { "  " };
+                    let label = format!("{}{}", prefix, name);
+                    draw_text_ttf(&mut buffer, tp_x, tcy, &label, if is_cur { c_text } else { c_dim }, &mut atlas, buf_w, buf_h);
+                    tcy += lh;
+                }
+            }
         }
 
         if snapshot {
@@ -3313,8 +3568,24 @@ fn main() {
             break;
         }
 
+        // Track window position and size each frame (get_position returns 0,0 after close)
+        let (wx, wy) = window.get_position();
+        if wx != 0 || wy != 0 {
+            last_window_pos = (wx, wy);
+        }
+        last_window_size = (win_w, win_h);
+
         window.update_with_buffer(&buffer, win_w, win_h).unwrap();
     }
+
+    // Save last known window position and size on exit
+    let wstate = serde_json::json!({
+        "x": last_window_pos.0,
+        "y": last_window_pos.1,
+        "w": last_window_size.0,
+        "h": last_window_size.1,
+    });
+    let _ = fs::write(&window_state_path, serde_json::to_string_pretty(&wstate).unwrap_or_default());
 }
 
 fn dump_png(path: &str, buf: &[u32], w: u32, h: u32) -> Result<(), image::ImageError> {

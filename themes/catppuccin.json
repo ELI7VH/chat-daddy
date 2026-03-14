@@ -1,0 +1,24 @@
+{
+  "name": "Catppuccin Mocha",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#1e1e2e",
+    "dim": "#6c7086",
+    "user": "#89dceb",
+    "assistant": "#f9e2af",
+    "text": "#cdd6f4",
+    "selection": "#313244",
+    "separator": "#313244",
+    "header_bg": "#181825",
+    "accent": "#cba6f7",
+    "search_bg": "#313244",
+    "timestamp": "#7f849c",
+    "select_bg": "#45475a",
+    "code": "#a6e3a1",
+    "code_bg": "#181825",
+    "bold": "#cdd6f4",
+    "toggle": "#f38ba8",
+    "heading": "#89b4fa",
+    "msg_time": "#6c7086"
+  }
+}

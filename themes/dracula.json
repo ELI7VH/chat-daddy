@@ -1,0 +1,24 @@
+{
+  "name": "Dracula",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#282a36",
+    "dim": "#6272a4",
+    "user": "#8be9fd",
+    "assistant": "#ffb86c",
+    "text": "#f8f8f2",
+    "selection": "#44475a",
+    "separator": "#44475a",
+    "header_bg": "#21222c",
+    "accent": "#bd93f9",
+    "search_bg": "#44475a",
+    "timestamp": "#6272a4",
+    "select_bg": "#44475a",
+    "code": "#50fa7b",
+    "code_bg": "#1e1f29",
+    "bold": "#f8f8f2",
+    "toggle": "#ff79c6",
+    "heading": "#bd93f9",
+    "msg_time": "#6272a4"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "Monokai",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#272822",
+    "dim": "#75715e",
+    "user": "#66d9ef",
+    "assistant": "#e6db74",
+    "text": "#f8f8f2",
+    "selection": "#49483e",
+    "separator": "#3e3d32",
+    "header_bg": "#1e1f1c",
+    "accent": "#a6e22e",
+    "search_bg": "#3e3d32",
+    "timestamp": "#75715e",
+    "select_bg": "#49483e",
+    "code": "#a6e22e",
+    "code_bg": "#1e1f1c",
+    "bold": "#f8f8f2",
+    "toggle": "#ae81ff",
+    "heading": "#f92672",
+    "msg_time": "#75715e"
+  }
+}

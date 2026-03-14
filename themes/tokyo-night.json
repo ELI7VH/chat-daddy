@@ -1,0 +1,24 @@
+{
+  "name": "Tokyo Night",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#1a1b26",
+    "dim": "#565f89",
+    "user": "#7dcfff",
+    "assistant": "#e0af68",
+    "text": "#a9b1d6",
+    "selection": "#283457",
+    "separator": "#292e42",
+    "header_bg": "#16161e",
+    "accent": "#7aa2f7",
+    "search_bg": "#292e42",
+    "timestamp": "#565f89",
+    "select_bg": "#33467c",
+    "code": "#9ece6a",
+    "code_bg": "#16161e",
+    "bold": "#c0caf5",
+    "toggle": "#bb9af7",
+    "heading": "#7aa2f7",
+    "msg_time": "#565f89"
+  }
+}

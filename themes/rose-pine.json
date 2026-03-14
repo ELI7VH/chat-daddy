@@ -1,0 +1,24 @@
+{
+  "name": "Rose Pine",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#191724",
+    "dim": "#6e6a86",
+    "user": "#9ccfd8",
+    "assistant": "#f6c177",
+    "text": "#e0def4",
+    "selection": "#26233a",
+    "separator": "#26233a",
+    "header_bg": "#1f1d2e",
+    "accent": "#c4a7e7",
+    "search_bg": "#26233a",
+    "timestamp": "#908caa",
+    "select_bg": "#393552",
+    "code": "#31748f",
+    "code_bg": "#1f1d2e",
+    "bold": "#e0def4",
+    "toggle": "#eb6f92",
+    "heading": "#c4a7e7",
+    "msg_time": "#6e6a86"
+  }
+}

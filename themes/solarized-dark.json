@@ -1,0 +1,24 @@
+{
+  "name": "Solarized Dark",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#002b36",
+    "dim": "#586e75",
+    "user": "#268bd2",
+    "assistant": "#b58900",
+    "text": "#839496",
+    "selection": "#073642",
+    "separator": "#073642",
+    "header_bg": "#002b36",
+    "accent": "#2aa198",
+    "search_bg": "#073642",
+    "timestamp": "#657b83",
+    "select_bg": "#073642",
+    "code": "#859900",
+    "code_bg": "#073642",
+    "bold": "#fdf6e3",
+    "toggle": "#6c71c4",
+    "heading": "#cb4b16",
+    "msg_time": "#586e75"
+  }
+}

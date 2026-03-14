@@ -1,0 +1,24 @@
+{
+  "name": "Light",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#ffffff",
+    "dim": "#8b949e",
+    "user": "#0969da",
+    "assistant": "#9a6700",
+    "text": "#1f2328",
+    "selection": "#ddf4ff",
+    "separator": "#d0d7de",
+    "header_bg": "#f6f8fa",
+    "accent": "#0969da",
+    "search_bg": "#ddf4ff",
+    "timestamp": "#656d76",
+    "select_bg": "#ddf4ff",
+    "code": "#116329",
+    "code_bg": "#f6f8fa",
+    "bold": "#1f2328",
+    "toggle": "#8250df",
+    "heading": "#0550ae",
+    "msg_time": "#8b949e"
+  }
+}

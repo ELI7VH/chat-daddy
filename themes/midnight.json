@@ -1,0 +1,24 @@
+{
+  "name": "Midnight",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#0d1117",
+    "dim": "#58585a",
+    "user": "#58c4dc",
+    "assistant": "#e6b34d",
+    "text": "#c9d1d9",
+    "selection": "#213d5a",
+    "separator": "#1a1e26",
+    "header_bg": "#141a22",
+    "accent": "#58c4dc",
+    "search_bg": "#1a2430",
+    "timestamp": "#446e7a",
+    "select_bg": "#264f78",
+    "code": "#9dc89d",
+    "code_bg": "#121a14",
+    "bold": "#f0f4f8",
+    "toggle": "#4488aa",
+    "heading": "#6ad0e8",
+    "msg_time": "#3a5a66"
+  }
+}

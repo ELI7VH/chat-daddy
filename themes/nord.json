@@ -1,0 +1,24 @@
+{
+  "name": "Nord",
+  "author": "chat-daddy",
+  "colors": {
+    "bg": "#2e3440",
+    "dim": "#4c566a",
+    "user": "#88c0d0",
+    "assistant": "#ebcb8b",
+    "text": "#d8dee9",
+    "selection": "#3b4252",
+    "separator": "#3b4252",
+    "header_bg": "#2e3440",
+    "accent": "#81a1c1",
+    "search_bg": "#3b4252",
+    "timestamp": "#4c566a",
+    "select_bg": "#434c5e",
+    "code": "#a3be8c",
+    "code_bg": "#2e3440",
+    "bold": "#eceff4",
+    "toggle": "#b48ead",
+    "heading": "#81a1c1",
+    "msg_time": "#4c566a"
+  }
+}
