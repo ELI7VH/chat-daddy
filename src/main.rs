@@ -2141,7 +2141,7 @@ fn start_beacon_listener(peer_state: Arc<Mutex<PeerState>>, my_hostname: String)
                         is_new = false;
                     }
                     // immediate fetch on new peer, periodic refresh otherwise
-                    if is_new || last_refresh.elapsed().as_secs() >= 10 {
+                    if is_new || last_refresh.elapsed().as_secs() >= 5 {
                         refresh_remote_entries(&peer_state);
                         last_refresh = Instant::now();
                     }
@@ -2154,7 +2154,7 @@ fn start_beacon_listener(peer_state: Arc<Mutex<PeerState>>, my_hostname: String)
                 }
             }
             // always refresh periodically regardless of beacon activity
-            if last_refresh.elapsed().as_secs() >= 10 {
+            if last_refresh.elapsed().as_secs() >= 5 {
                 refresh_remote_entries(&peer_state);
                 last_refresh = Instant::now();
             }
