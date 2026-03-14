@@ -2162,39 +2162,71 @@ fn main() {
         window.set_position(x, y);
     }
 
-    // Show splash screen while loading (native aspect ratio, centered on black)
-    {
-        let splash_bytes = include_bytes!("../assets/splash.jpg");
-        if let Ok(splash_img) = image::load_from_memory(splash_bytes) {
-            let (iw, ih) = splash_img.dimensions();
-            // Fit image within window preserving aspect ratio
-            let scale = (WIN_W as f64 / iw as f64).min(WIN_H as f64 / ih as f64);
-            let dw = (iw as f64 * scale) as u32;
-            let dh = (ih as f64 * scale) as u32;
-            let resized = splash_img.resize_exact(dw, dh, image::imageops::FilterType::Triangle);
-            let rgb_img = resized.to_rgb8();
-            let mut splash_buf = vec![rgb(0, 0, 0); WIN_W * WIN_H];
-            let ox = (WIN_W as u32 - dw) / 2;
-            let oy = (WIN_H as u32 - dh) / 2;
-            for py in 0..dh {
-                for px in 0..dw {
-                    let pixel = rgb_img.get_pixel(px, py);
-                    let bx = (ox + px) as usize;
-                    let by = (oy + py) as usize;
-                    if bx < WIN_W && by < WIN_H {
-                        splash_buf[by * WIN_W + bx] = rgb(pixel[0], pixel[1], pixel[2]);
-                    }
-                }
-            }
-            let _ = window.update_with_buffer(&splash_buf, WIN_W, WIN_H);
-        }
-    }
-
     // Load icon pixels for help overlay (96px circle-cropped)
     let help_icon: Option<(u32, u32, Vec<u32>)> = load_icon_pixels(96);
 
-    let all_transcripts = get_all_transcripts(&sources);
-    let mut chats = load_chats();
+    // Kick off transcript loading in background
+    let sources_clone = sources.clone();
+    let load_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let load_done2 = load_done.clone();
+    let load_result: Arc<Mutex<Option<(Vec<TranscriptEntry>, HashMap<String, ChatMeta>)>>> = Arc::new(Mutex::new(None));
+    let load_result2 = load_result.clone();
+    thread::spawn(move || {
+        let transcripts = get_all_transcripts(&sources_clone);
+        let chats = load_chats();
+        *load_result2.lock().unwrap() = Some((transcripts, chats));
+        load_done2.store(true, std::sync::atomic::Ordering::Release);
+    });
+
+    // Pulsing icon splash while loading
+    {
+        let splash_icon = load_icon_pixels(128);
+        if let Some((iw, ih, ref icon_px)) = splash_icon {
+            let bg_color = rgb(0x0d, 0x11, 0x17);
+            let mut buf = vec![bg_color; init_w * init_h];
+            let ox = (init_w as u32 - iw) / 2;
+            let oy = (init_h as u32 - ih) / 2;
+            // Pre-blit static icon onto buffer
+            for iy in 0..ih {
+                for ix in 0..iw {
+                    let src = icon_px[(iy * iw + ix) as usize];
+                    let a = (src >> 24) & 0xFF;
+                    if a == 0 { continue; }
+                    let bx = (ox + ix) as usize;
+                    let by = (oy + iy) as usize;
+                    if bx < init_w && by < init_h {
+                        buf[by * init_w + bx] = src & 0x00FFFFFF;
+                    }
+                }
+            }
+            let static_buf = buf.clone();
+            let mut frame = 0u32;
+            while !load_done.load(std::sync::atomic::Ordering::Acquire) && window.is_open() {
+                // Pulse: fade icon brightness using a sine wave
+                let pulse = ((frame as f64 * 0.15).sin() * 0.3 + 0.7) as f32; // 0.4 to 1.0
+                for i in 0..buf.len() {
+                    let s = static_buf[i];
+                    if s == bg_color {
+                        buf[i] = bg_color;
+                    } else {
+                        let r = ((((s >> 16) & 0xFF) as f32) * pulse) as u32;
+                        let g = ((((s >> 8) & 0xFF) as f32) * pulse) as u32;
+                        let b = (((s & 0xFF) as f32) * pulse) as u32;
+                        buf[i] = (r.min(255) << 16) | (g.min(255) << 8) | b.min(255);
+                    }
+                }
+                let _ = window.update_with_buffer(&buf, init_w, init_h);
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                frame += 1;
+            }
+        } else {
+            while !load_done.load(std::sync::atomic::Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+        }
+    }
+
+    let (all_transcripts, mut chats) = load_result.lock().unwrap().take().unwrap();
     let mut state = AppState::List {
         filtered: all_transcripts.clone(),
         transcripts: all_transcripts,
