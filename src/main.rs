@@ -3247,8 +3247,7 @@ fn main() {
                         Some(origin) => format!("{} · {}", origin.hostname, t.project),
                         None => t.project.clone(),
                     };
-                    let uuid_short = if t.uuid.len() >= 8 { &t.uuid[..8] } else { &t.uuid };
-                    let right = format!("{}  {}  {}", project_display, uuid_short, t.timestamp);
+                    let right = format!("{}  {}", project_display, t.timestamp);
                     let right_w = right.len() as i32 * advance;
                     draw_text_ttf(
                         &mut buffer, win_w as i32 - PAD - right_w, y, &right,
