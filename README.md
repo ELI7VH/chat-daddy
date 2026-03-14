@@ -11,7 +11,7 @@
 Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-buffer rendered with zero GPU dependencies. Reads transcripts from Claude Code, Cursor, and Codex — all in one place.
 
 <p align="center">
-  <video src="https://github.com/ELI7VH/chat-daddy/raw/main/assets/demo.mp4" width="100%" autoplay loop muted playsinline></video>
+  <img src="assets/demo.gif" alt="Chat Daddy demo" width="100%" />
 </p>
 
 ## Features
