@@ -90,6 +90,64 @@ fn native_view_size(_window: &Window) -> Option<(usize, usize)> {
     None // other platforms: minifb's get_size() works correctly
 }
 
+/// Set the macOS dock icon from the embedded icon.png.
+/// minifb doesn't do this — unbundled binaries get the default terminal icon.
+///
+/// objc_msgSend on ARM64 is NOT variadic — must transmute to exact function
+/// pointer types per call, otherwise the compiler uses the wrong ABI.
+#[cfg(target_os = "macos")]
+fn set_macos_dock_icon() {
+    let png_bytes = include_bytes!("../assets/icon.png");
+
+    #[allow(clashing_extern_declarations)]
+    extern "C" {
+        fn sel_registerName(name: *const u8) -> *const std::ffi::c_void;
+        fn objc_getClass(name: *const u8) -> *mut std::ffi::c_void;
+        fn objc_msgSend(); // raw symbol — we transmute to correct signatures
+    }
+
+    type MsgSend0 = unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    type MsgSend1 = unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    type MsgSendDataWithBytes = unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, *const std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+
+    unsafe {
+        let send0: MsgSend0 = std::mem::transmute(objc_msgSend as *const ());
+        let send1: MsgSend1 = std::mem::transmute(objc_msgSend as *const ());
+        let send_data: MsgSendDataWithBytes = std::mem::transmute(objc_msgSend as *const ());
+
+        // NSData *data = [NSData dataWithBytes:png_bytes length:len]
+        let cls_nsdata = objc_getClass(b"NSData\0".as_ptr());
+        let sel_data = sel_registerName(b"dataWithBytes:length:\0".as_ptr());
+        let ns_data = send_data(
+            cls_nsdata,
+            sel_data,
+            png_bytes.as_ptr() as *const std::ffi::c_void,
+            png_bytes.len(),
+        );
+        if ns_data.is_null() { return; }
+
+        // NSImage *image = [[NSImage alloc] initWithData:data]
+        let cls_nsimage = objc_getClass(b"NSImage\0".as_ptr());
+        let sel_alloc = sel_registerName(b"alloc\0".as_ptr());
+        let sel_init = sel_registerName(b"initWithData:\0".as_ptr());
+        let ns_image = send0(cls_nsimage, sel_alloc);
+        let ns_image = send1(ns_image, sel_init, ns_data);
+        if ns_image.is_null() { return; }
+
+        // [[NSApplication sharedApplication] setApplicationIconImage:image]
+        let cls_nsapp = objc_getClass(b"NSApplication\0".as_ptr());
+        let sel_shared = sel_registerName(b"sharedApplication\0".as_ptr());
+        let sel_set_icon = sel_registerName(b"setApplicationIconImage:\0".as_ptr());
+        let app = send0(cls_nsapp, sel_shared);
+        send1(app, sel_set_icon, ns_image);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_macos_dock_icon() {
+    // Windows icon is handled by build.rs / winresource
+}
+
 // --- default colors (used as fallbacks, overridable via config) ---
 // These constants are used by helper functions (parse_inline_markdown, etc.)
 // and get shadowed by theme values inside main()'s render loop.
@@ -2230,6 +2288,7 @@ fn fetch_remote_messages(addr: SocketAddr, uuid: &str) -> Vec<MessageLine> {
 }
 
 fn main() {
+    set_macos_dock_icon();
     let mut cfg = load_config();
     let sources = cfg.sources.clone();
     let mut theme = cfg.theme.clone();
