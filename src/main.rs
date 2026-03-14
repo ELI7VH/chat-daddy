@@ -2042,6 +2042,28 @@ fn handle_tcp_client(stream: TcpStream, sources: &[SourceConfig]) {
     }
 }
 
+fn get_broadcast_addrs() -> Vec<SocketAddr> {
+    let mut addrs = Vec::new();
+    // Try to get local IP by connecting to a public address (doesn't actually send data)
+    if let Ok(s) = UdpSocket::bind("0.0.0.0:0") {
+        // Connect to a public IP just to determine our local interface address
+        if s.connect("8.8.8.8:80").is_ok() {
+            if let Ok(local) = s.local_addr() {
+                if let std::net::IpAddr::V4(ip) = local.ip() {
+                    let octets = ip.octets();
+                    // Assume /24 subnet — broadcast is x.x.x.255
+                    let bcast = std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], 255);
+                    addrs.push(SocketAddr::new(std::net::IpAddr::V4(bcast), LAN_PORT));
+                }
+            }
+        }
+    }
+    // Always also try the global broadcast as fallback
+    addrs.push(format!("255.255.255.255:{}", LAN_PORT).parse().unwrap());
+    addrs.dedup();
+    addrs
+}
+
 fn start_beacon_sender(hostname: String, tcp_port: u16) {
     thread::spawn(move || {
         let Ok(sock) = UdpSocket::bind("0.0.0.0:0") else { return };
@@ -2050,9 +2072,11 @@ fn start_beacon_sender(hostname: String, tcp_port: u16) {
             "{{\"h\":\"{}\",\"p\":{},\"v\":\"0.1.0\"}}\n",
             hostname, tcp_port
         );
-        let dest: SocketAddr = format!("255.255.255.255:{}", LAN_PORT).parse().unwrap();
         loop {
-            let _ = sock.send_to(beacon.as_bytes(), dest);
+            let dests = get_broadcast_addrs();
+            for dest in &dests {
+                let _ = sock.send_to(beacon.as_bytes(), dest);
+            }
             thread::sleep(std::time::Duration::from_secs(3));
         }
     });
