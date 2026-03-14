@@ -3543,7 +3543,7 @@ fn main() {
             };
             let icon_size: i32 = if help_icon.is_some() { 96 } else { 0 };
             let icon_gap: i32 = if help_icon.is_some() { 8 } else { 0 };
-            let title = "chat-daddy";
+            let title = format!("chat-daddy v{}", env!("CARGO_PKG_VERSION"));
             let mode_label = match &state {
                 AppState::List { .. } => "LIST",
                 AppState::View { .. } => "VIEW",
@@ -3620,7 +3620,7 @@ fn main() {
             // Title "chat-daddy" (centered)
             let title_w = title.len() as i32 * advance;
             let title_x = px + (panel_w - title_w) / 2;
-            draw_text_ttf(&mut buffer, title_x, cy, title, c_accent, &mut atlas, buf_w, buf_h);
+            draw_text_ttf(&mut buffer, title_x, cy, &title, c_accent, &mut atlas, buf_w, buf_h);
             cy += lh;
             // Mode label (centered, dim)
             let mode_w = mode_label.len() as i32 * advance;
