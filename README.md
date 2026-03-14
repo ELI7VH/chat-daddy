@@ -2,10 +2,6 @@
   <img src="assets/banner.png" alt="Chat Daddy — All Your Chats, One Daddy" width="100%" />
 </p>
 
-<p align="center">
-  <img src="assets/icon.png" alt="Chat Daddy" width="120" />
-</p>
-
 # <img src="assets/icon.png" alt="" width="32" height="32" style="vertical-align: middle;" /> Chat Daddy
 
 Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-buffer rendered with zero GPU dependencies. Reads transcripts from Claude Code, Cursor, and Codex — all in one place.
@@ -33,12 +29,12 @@ Minimal, keyboard-driven chat transcript viewer for AI coding assistants. Pixel-
 
 Download the prebuilt binary for your platform from [GitHub Releases](https://github.com/ELI7VH/chat-daddy/releases/latest):
 
-| Platform               | Binary name                      |
-|------------------------|----------------------------------|
-| macOS ARM64 (M1/M2+)   | `chat-daddy-darwin-arm64`        |
-| macOS x64 (Intel)       | `chat-daddy-darwin-x86_64`       |
-| Linux x86_64            | `chat-daddy-linux-x86_64`        |
-| Windows x86_64          | `chat-daddy-windows-x86_64.exe`  |
+| Platform             | Binary name                     |
+| -------------------- | ------------------------------- |
+| macOS ARM64 (M1/M2+) | `chat-daddy-darwin-arm64`       |
+| macOS x64 (Intel)    | `chat-daddy-darwin-x86_64`      |
+| Linux x86_64         | `chat-daddy-linux-x86_64`       |
+| Windows x86_64       | `chat-daddy-windows-x86_64.exe` |
 
 ```bash
 # Auto-detect your platform and download
@@ -57,6 +53,7 @@ cargo build --release
 ```
 
 **Requirements:**
+
 - A monospace TTF font installed (defaults to [Fira Code](https://github.com/tonsky/FiraCode) Light — configurable in `~/.chat-daddy/config.json`)
 - Rust toolchain only needed if building from source
 
@@ -69,6 +66,7 @@ Config, sources, and chat metadata auto-generate on first run. No manual setup n
 Asset names follow a deterministic pattern: `chat-daddy-{os}-{arch}` where `{os}` and `{arch}` match raw `uname` output. An agent can construct the name directly — no lookup table needed.
 
 **Steps:**
+
 1. Construct the asset name: `ASSET="chat-daddy-$(uname -s | tr A-Z a-z)-$(uname -m)"`
 2. Download it:
    ```bash
@@ -87,28 +85,30 @@ Binaries are built automatically for **Windows x86_64**, **Linux x86_64**, **mac
 Press `?` in-app for the full hotkey overlay.
 
 ### List View
-| Key | Action |
-|-----|--------|
-| Up / Down | Select chat |
-| Enter | Open chat |
-| F | Star / unstar |
-| Shift+F | Toggle favorites filter |
-| / | Search |
-| N | Rename chat |
-| T | Cycle theme |
-| ? | Help overlay |
-| Escape | Quit |
+
+| Key       | Action                  |
+| --------- | ----------------------- |
+| Up / Down | Select chat             |
+| Enter     | Open chat               |
+| F         | Star / unstar           |
+| Shift+F   | Toggle favorites filter |
+| /         | Search                  |
+| N         | Rename chat             |
+| T         | Cycle theme             |
+| ?         | Help overlay            |
+| Escape    | Quit                    |
 
 ### Chat View
-| Key | Action |
-|-----|--------|
-| Up / Down | Scroll |
-| PageUp / PageDown | Fast scroll |
-| Left / Right | Previous / next chat |
-| Space | Expand / collapse message group |
-| C | Copy selected text |
-| ? | Help overlay |
-| Escape | Back to list |
+
+| Key               | Action                          |
+| ----------------- | ------------------------------- |
+| Up / Down         | Scroll                          |
+| PageUp / PageDown | Fast scroll                     |
+| Left / Right      | Previous / next chat            |
+| Space             | Expand / collapse message group |
+| C                 | Copy selected text              |
+| ?                 | Help overlay                    |
+| Escape            | Back to list                    |
 
 ## Config
 
@@ -126,9 +126,24 @@ Stored at `~/.chat-daddy/config.json`. Auto-generated on first run with detected
     "assistant": "#e6b34d"
   },
   "sources": [
-    { "name": "claude", "format": "claude", "root": "~/.claude", "layout": "projects" },
-    { "name": "cursor", "format": "cursor", "root": "~/.cursor", "layout": "agent-transcripts" },
-    { "name": "codex",  "format": "codex",  "root": "~/.codex",  "layout": "sessions" }
+    {
+      "name": "claude",
+      "format": "claude",
+      "root": "~/.claude",
+      "layout": "projects"
+    },
+    {
+      "name": "cursor",
+      "format": "cursor",
+      "root": "~/.cursor",
+      "layout": "agent-transcripts"
+    },
+    {
+      "name": "codex",
+      "format": "codex",
+      "root": "~/.codex",
+      "layout": "sessions"
+    }
   ]
 }
 ```
