@@ -19,6 +19,9 @@
     "bold": "#eceff4",
     "toggle": "#b48ead",
     "heading": "#81a1c1",
-    "msg_time": "#4c566a"
+    "msg_time": "#4c566a",
+    "remote_host": "#88c0d0",
+    "platform": "#4c566a",
+    "datetime": "#616e88"
   }
 }

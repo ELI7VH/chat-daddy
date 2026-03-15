@@ -191,6 +191,9 @@ struct Theme {
     toggle: (u8, u8, u8),
     heading: (u8, u8, u8),
     msg_time: (u8, u8, u8),
+    remote_host: (u8, u8, u8),
+    platform: (u8, u8, u8),
+    datetime: (u8, u8, u8),
 }
 
 impl Default for Theme {
@@ -214,6 +217,9 @@ impl Default for Theme {
             toggle: COL_TOGGLE,
             heading: COL_HEADING,
             msg_time: COL_MSG_TIME,
+            remote_host: COL_ACCENT,
+            platform: COL_DIM,
+            datetime: COL_TIMESTAMP,
         }
     }
 }
@@ -264,6 +270,9 @@ fn load_theme_from_value(val: &Value) -> Theme {
         col!("toggle", toggle);
         col!("heading", heading);
         col!("msg_time", msg_time);
+        col!("remote_host", remote_host);
+        col!("platform", platform);
+        col!("datetime", datetime);
     }
     t
 }
@@ -287,6 +296,9 @@ fn theme_to_json(t: &Theme) -> Value {
         "bold": color_to_hex(t.bold),
         "toggle": color_to_hex(t.toggle),
         "heading": color_to_hex(t.heading),
+        "remote_host": color_to_hex(t.remote_host),
+        "platform": color_to_hex(t.platform),
+        "datetime": color_to_hex(t.datetime),
         "msg_time": color_to_hex(t.msg_time),
     })
 }
@@ -2463,7 +2475,7 @@ fn main() {
     let mut c_header_bg = theme.header_bg;
     let mut c_accent = theme.accent;
     let mut c_search_bg = theme.search_bg;
-    let mut c_timestamp = theme.timestamp;
+    let mut _c_timestamp = theme.timestamp;
     let mut c_select_bg = theme.select_bg;
     let mut c_code = theme.code;
     let mut c_code_bg = theme.code_bg;
@@ -2471,6 +2483,9 @@ fn main() {
     let mut c_toggle = theme.toggle;
     let mut c_heading = theme.heading;
     let mut c_msg_time = theme.msg_time;
+    let mut c_remote_host = theme.remote_host;
+    let mut c_platform = theme.platform;
+    let mut c_datetime = theme.datetime;
     let mut needs_theme_reload = false;
 
     while window.is_open() && !quit_requested {
@@ -2486,7 +2501,7 @@ fn main() {
             c_header_bg = theme.header_bg;
             c_accent = theme.accent;
             c_search_bg = theme.search_bg;
-            c_timestamp = theme.timestamp;
+            _c_timestamp = theme.timestamp;
             c_select_bg = theme.select_bg;
             c_code = theme.code;
             c_code_bg = theme.code_bg;
@@ -2494,6 +2509,9 @@ fn main() {
             c_toggle = theme.toggle;
             c_heading = theme.heading;
             c_msg_time = theme.msg_time;
+            c_remote_host = theme.remote_host;
+            c_platform = theme.platform;
+            c_datetime = theme.datetime;
             needs_theme_reload = false;
         }
         if let Some(s) = transition.take() {
@@ -2589,6 +2607,7 @@ fn main() {
                             // re-fetch from peer
                             let msgs = fetch_remote_messages(origin.tcp_addr, chat_uuid);
                             if !msgs.is_empty() {
+                                let old_len = lines.len();
                                 *groups = group_messages(&msgs);
                                 let wrap_w = chars_per_line(win_w, advance);
                                 let (nl, nm, nc) = rebuild_view(groups, expanded, wrap_w);
@@ -2596,14 +2615,19 @@ fn main() {
                                 *line_meta = nm;
                                 *in_code = nc;
                                 *last_wrap_w = wrap_w;
-                                let visible = ((win_h as i32) - content_top - PAD) / lh;
-                                *scroll = (lines.len() as i32 - visible).max(0);
+                                // only scroll to bottom if new content arrived
+                                if lines.len() != old_len {
+                                    let visible = ((win_h as i32) - content_top - PAD) / lh;
+                                    *scroll = (lines.len() as i32 - visible).max(0);
+                                }
                             }
                         }
                         None => {
                             let new_mtime = get_file_mtime(path);
                             if new_mtime != *file_mtime {
                                 *file_mtime = new_mtime;
+                                let visible = ((win_h as i32) - content_top - PAD) / lh;
+                                let was_at_bottom = *scroll >= (lines.len() as i32 - visible).max(0);
                                 let msgs = load_messages(path, source_format);
                                 *groups = group_messages(&msgs);
                                 let wrap_w = chars_per_line(win_w, advance);
@@ -2612,9 +2636,10 @@ fn main() {
                                 *line_meta = nm;
                                 *in_code = nc;
                                 *last_wrap_w = wrap_w;
-                                // scroll to bottom
-                                let visible = ((win_h as i32) - content_top - PAD) / lh;
-                                *scroll = (lines.len() as i32 - visible).max(0);
+                                // only auto-scroll to bottom if user was already there
+                                if was_at_bottom {
+                                    *scroll = (lines.len() as i32 - visible).max(0);
+                                }
                             }
                         }
                     }
@@ -3123,7 +3148,13 @@ fn main() {
                         } else if sel.active {
                             sel.active = false;
                         } else {
-                            let all = get_all_transcripts(&sources);
+                            let mut all = get_all_transcripts(&sources);
+                            // merge remote peers back in
+                            if let Ok(ps) = peer_state.try_lock() {
+                                all.extend(ps.remote_entries.clone());
+                                all.sort_by(|a, b| b.mtime_secs.cmp(&a.mtime_secs));
+                            }
+                            last_merged = all.clone();
                             let idx = saved_list_idx.min(all.len().saturating_sub(1));
                             transition = Some(AppState::List {
                                 filtered: all.clone(),
@@ -3307,17 +3338,25 @@ fn main() {
                         &mut atlas, buf_w, buf_h,
                     );
 
-                    // Right side: platform / hash / timestamp
-                    let project_display = match &t.remote {
-                        Some(origin) => format!("{} · {}", origin.hostname, t.project),
-                        None => t.project.clone(),
-                    };
-                    let right = format!("{}  {}", project_display, t.timestamp);
-                    let right_w = right.len() as i32 * advance;
-                    draw_text_ttf(
-                        &mut buffer, win_w as i32 - PAD - right_w, y, &right,
-                        c_timestamp, &mut atlas, buf_w, buf_h,
-                    );
+                    // Right side: remote host · platform  timestamp (each with its own color)
+                    {
+                        let ts_text = &t.timestamp;
+                        let ts_w = ts_text.len() as i32 * advance;
+                        let mut rx = win_w as i32 - PAD - ts_w;
+                        draw_text_ttf(&mut buffer, rx, y, ts_text, c_datetime, &mut atlas, buf_w, buf_h);
+
+                        let plat_text = format!("{}  ", t.project);
+                        let plat_w = plat_text.len() as i32 * advance;
+                        rx -= plat_w;
+                        draw_text_ttf(&mut buffer, rx, y, &plat_text, c_platform, &mut atlas, buf_w, buf_h);
+
+                        if let Some(origin) = &t.remote {
+                            let host_text = format!("{} · ", origin.hostname);
+                            let host_w = host_text.len() as i32 * advance;
+                            rx -= host_w;
+                            draw_text_ttf(&mut buffer, rx, y, &host_text, c_remote_host, &mut atlas, buf_w, buf_h);
+                        }
+                    }
 
                     // Preview lines (respects newlines in text)
                     let preview_text = if !t.last_preview.is_empty() { &t.last_preview } else { &t.preview };
